@@ -5,7 +5,8 @@
 //   columns 8-11 : instrument picker, 16 instruments, Shift shows the next 16
 //
 // Steps are written to the track under the cursor. Tapping an empty step writes the last
-// entered note with the selected instrument, tapping a filled step clears it.
+// entered note (middle C if none yet) with the selected instrument, tapping a filled step
+// clears it.
 // Up/Down move the 32-step window, Left/Right change track, screen button 8 exits.
 //
 // Hold-and-tap (same column mapping as the regular pattern editor):
@@ -171,11 +172,15 @@ static void initTargetValue(uint8_t target)
         return;
     }
 
-    // last effect used in the editor; fall back to the first real effect if there is none
+    // last effect used in the editor (index into the effect list, like the Fx popup);
+    // fall back to Volume if none has been picked yet
+    constexpr uint8_t kSelectableFxCount = FX_COUNT - FX_COUNT_HIDDEN_FXes;
+    constexpr uint8_t kFallbackFxIdx = 2; // "V - Volume/Velocity"
+
     fxNameIdx = PTE->getPreviousUsedFx();
-    if (fxNameIdx == 0 || fxNameIdx >= interfaceGlobals.fxNameCount())
+    if (fxNameIdx == 0 || fxNameIdx >= kSelectableFxCount)
     {
-        fxNameIdx = 2;
+        fxNameIdx = kFallbackFxIdx;
     }
 
     uint8_t type = interfaceGlobals.fxNameToId(fxNameIdx);
@@ -462,12 +467,26 @@ void cPatternEditor::stepSeqLightPads()
             break;
         }
 
-        // while Vol/Fx is held, show which steps have that value instead of notes
+        // while Vol/Fx is held: steps with that effect/value at normal level, other notes dimmed
         Sequencer::strPattern::strTrack::strStep* stepData = &pattern->track[track].step[step];
-        bool lit = heldTarget != kTargetNone ? stepHasTarget(stepData, heldTarget)
-                                             : !stepData->isNoteEmpty();
+        const bool hasNote = !stepData->isNoteEmpty();
 
-        uint8_t level = lit ? lightOn : 0;
+        uint8_t level = 0;
+        if (heldTarget != kTargetNone)
+        {
+            if (stepHasTarget(stepData, heldTarget))
+            {
+                level = lightOn;
+            }
+            else if (hasNote)
+            {
+                level = lightDim;
+            }
+        }
+        else if (hasNote)
+        {
+            level = lightOn;
+        }
         if (playing && step == trackerPattern.playheadPosition)
         {
             level = lightBright;
@@ -506,6 +525,18 @@ void cPatternEditor::stepSeqLightPads()
 }
 
 //------------------------------------------------------------------------------
+// Last entered note, or middle C (MIDI 60, shown as C5 on the Tracker) if no note has been
+// entered yet. New projects start with lastUsedNote = 0.
+static uint8_t stepSeqNote()
+{
+    uint8_t note = mtProject.values.lastUsedNote;
+    if (note == 0 || note > Sequencer::STEP_NOTE_MAX)
+    {
+        note = Sequencer::STEP_NOTE_DEFAULT;
+    }
+    return note;
+}
+
 static void stepSeqToggleStep(uint16_t step)
 {
     const uint8_t track = PTE->trackerPattern.actualTrack;
@@ -517,7 +548,7 @@ static void stepSeqToggleStep(uint16_t step)
     if (stepData->isNoteEmpty())
     {
         // writes lastUsedInstrument too, stores undo and marks the pattern changed
-        sequencer.setSelectionNote(mtProject.values.lastUsedNote);
+        sequencer.setSelectionNote(stepSeqNote());
     }
     else
     {
