@@ -35,8 +35,11 @@ jobs:
           tar -xjf gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2 -C agt/10.3 --strip-components=1
           rm gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
 
+      # Output file: TrackerPlus_JL_<version>.ptf (must stay <= 31 characters for the bootloader)
       - name: Build Tracker+ firmware with step sequencer mode
-        run: make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE"
+        run: |
+          make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE" \
+            PLUS_POSTFIX='JL_$(PLUS_VER_MAJOR).$(PLUS_VER_MINOR).$(PLUS_VER_PATCH)'
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
