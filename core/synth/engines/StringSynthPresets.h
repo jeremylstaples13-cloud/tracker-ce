@@ -161,7 +161,7 @@ inline const Preset kPresets[] = {
         { P::kBody, 0.2f }, { P::kDrift, 0.3f } } },
     { "23 Wind Bottle", {
         { P::kExciter, kBow }, { P::kExcTone, 0.3f }, { P::kExcLength, 150 }, { P::kModel, kPipe },
-        { P::kDecay, 4 }, { P::kBrightness, 0.3f }, { P::kRelease, 0.6f },
+        { P::kDecay, 4 }, { P::kBrightness, 0.45f }, { P::kRelease, 0.6f },
         { P::kBody, 0 }, { P::kDrift, 0.45f }, { P::kDriftRate, 1.5f }, { P::kVolume, 2.0f } } },
 
     // Reeds -----------------------------------------------------------------------------
@@ -194,7 +194,7 @@ inline const Preset kPresets[] = {
         { P::kExciter, kBow }, { P::kExcTone, 0.5f }, { P::kExcLength, 200 },
         { P::kDecay, 30 }, { P::kBrightness, 0.6f }, { P::kStiffness, 0.2f }, { P::kRelease, 3 },
         { P::kStr2Tune, 7 }, { P::kStr2Level, 0.6f },
-        { P::kBody, 0.3f }, { P::kDrift, 0.6f }, { P::kDriftRate, 0.2f } } },
+        { P::kBody, 0.3f }, { P::kDrift, 0.6f }, { P::kDriftRate, 0.2f }, { P::kVolume, 1.7f } } },
     { "31 Slide Legato", {
         { P::kExciter, kPluck }, { P::kExcTone, 0.7f }, { P::kExcLength, 5 },
         { P::kDecay, 6 }, { P::kBrightness, 0.7f }, { P::kRelease, 0.5f },

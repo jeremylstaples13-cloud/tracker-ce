@@ -202,22 +202,16 @@ class Resonator
         freqHz = std::clamp(freqHz, 8.0f, 8000.0f);
         const float w = 2.0f * kPi * freqHz / kSampleRate;
 
-        // Damping (Brightness 0..1):
-        //  0.5..1: two-point averager (classic Karplus-Strong), nearly lossless at the
-        //          fundamental, so Decay is accurate even for high notes
-        //  0..0.5: plus a one-pole lowpass tracking the note (3x .. 32x the fundamental) for
-        //          muffled / palm-muted tones, which then also decay faster
+        // Damping (Brightness 0..1). The classic Karplus-Strong two-point averager is always on,
+        // so the noise of the attack dies away quickly and only the tone keeps ringing (with too
+        // little damping the burst keeps circulating and is heard repeating, like a short delay).
+        // Brightness adds a one-pole lowpass that tracks the note: 3x the fundamental (muffled)
+        // up to 43x (bright); at full brightness the averager is also eased off a little.
         const float b = std::clamp(p.brightness, 0.0f, 1.0f);
-        avgS = 0.5f * (1.0f - b);
-        if (b < 0.5f)
+        avgS = 0.5f - 0.15f * b * b;
         {
-            const float x = b / 0.5f;
-            const float fc = std::min(freqHz * (3.0f + 29.0f * x * x), 16000.0f);
+            const float fc = std::min(freqHz * (3.0f + 40.0f * b * b), 16000.0f);
             lpA = std::exp(-2.0f * kPi * fc / kSampleRate);
-        }
-        else
-        {
-            lpA = 0.0f;
         }
 
         apC = -0.65f * std::clamp(p.stiffness, 0.0f, 1.0f);
