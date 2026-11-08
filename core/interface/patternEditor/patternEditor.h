@@ -7,6 +7,16 @@
 #include "mtKeyboardManager.h"
 #include "mtSequencer.h"
 
+// Physical step-sequencer mode: opt-in via CUSTOM_DEFINES="-DSTEP_SEQ_MODE",
+// Tracker+ only for now.
+#if defined(STEP_SEQ_MODE) && defined(PLATFORM_IMX) && !defined(TRACKER_MINI)
+#define STEP_SEQ_ENABLED 1
+#endif
+
+#ifdef STEP_SEQ_ENABLED
+void functStepSeqToggle();
+#endif
+
 uint8_t isMultiSelection();
 uint8_t isMultiSelectionOnOneLine();
 int16_t getActualStep();
@@ -367,6 +377,24 @@ class cPatternEditor : public ModuleBase
     void showTitleBarPattern();
     void showActualParamOnBar(bool forceShow = false);
     void hideActualParamOnBar();
+
+#ifdef STEP_SEQ_ENABLED
+    //--------------------------------------------------------
+    // physical step sequencer mode (fStepSeq.cpp)
+    static constexpr uint8_t kStepSeqSteps = 32;      // 4 rows x 8 pads
+    static constexpr uint8_t kStepSeqInstrPads = 16;  // 4 x 4 block on the right
+
+    bool stepSeqActive = false;
+    uint8_t stepSeqLedCache[48]; // last brightness sent to each pad, 0 = off
+
+    void enterStepSeq();
+    void exitStepSeq(bool restoreScreen = true);
+    void setStepSeqFunct();
+    void showStepSeqLabels();
+    void stepSeqLightPads();
+    void stepSeqInvalidateLeds();
+    uint16_t stepSeqWindowStart();
+#endif
 
     uint8_t lastTitleBarParamValue = 0xFF;
     uint8_t lastTitleBarFx = 0xFF;

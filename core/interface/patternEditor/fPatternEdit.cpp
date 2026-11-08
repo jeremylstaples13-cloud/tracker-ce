@@ -248,6 +248,14 @@ void cPatternEditor::update()
 
     readPatternState();
 
+#ifdef STEP_SEQ_ENABLED
+    // diff-based: only pads whose state changed (playhead, edits, stop) are written
+    if (stepSeqActive)
+    {
+        stepSeqLightPads();
+    }
+#endif
+
     if (sequencer.isStop())
     {
         // jesli ostatnio bylo odtwarzane zaznaczenie to cofnij playhed na 0
@@ -379,6 +387,13 @@ void cPatternEditor::stop()
         fillState = 0;
     }
 
+#ifdef STEP_SEQ_ENABLED
+    if (stepSeqActive)
+    {
+        exitStepSeq(false);
+    }
+#endif
+
     padsBacklight.clearGlobalPads(1, 1, 1);
 
     mtPopups.hideInfoPopup();
@@ -450,6 +465,13 @@ void cPatternEditor::setDefaultScreenFunct()
     ip->setButtonObj(interfaceButtonMiniMiddle, functMiniMiddle);
 
     ip->setPadsGlobal(functPads);
+
+#ifdef STEP_SEQ_ENABLED
+    if (stepSeqActive)
+    {
+        setStepSeqFunct();
+    }
+#endif
 }
 
 void cPatternEditor::setSwitchModuleFunct()
@@ -4173,6 +4195,14 @@ void cPatternEditor::loadPatternsStatus()
 
 void cPatternEditor::lightUpPadBoard()
 {
+#ifdef STEP_SEQ_ENABLED
+    if (stepSeqActive)
+    {
+        stepSeqLightPads();
+        return;
+    }
+#endif
+
     padsBacklight.clearGlobalPads(1, 1, 0);
 
     //--------------------------------------------
@@ -5158,6 +5188,9 @@ void cPatternEditor::setActionButtonPage3Funct()
 
     ip->setButtonObj(interfaceButton0, buttonPress, functNamePattern);
     ip->setButtonObj(interfaceButton1, buttonPress, functNameTrack);
+#ifdef STEP_SEQ_ENABLED
+    ip->setButtonObj(interfaceButton2, buttonPress, functStepSeqToggle);
+#endif
 
     ip->setButtonObj(interfaceButton7, buttonPress, functNextActionButtonPage);
 }
@@ -5165,6 +5198,15 @@ void cPatternEditor::setActionButtonPage3Funct()
 // odsiwez przypisanie akcji oraz grafike przyciskow pod ekranem
 void cPatternEditor::refreshActualActionButtonPage()
 {
+#ifdef STEP_SEQ_ENABLED
+    if (stepSeqActive)
+    {
+        setStepSeqFunct();
+        showStepSeqLabels();
+        return;
+    }
+#endif
+
     ip->clearButtonsRange(interfaceButton0, interfaceButton7);
 
     switch (actualActionButtonsPage)
