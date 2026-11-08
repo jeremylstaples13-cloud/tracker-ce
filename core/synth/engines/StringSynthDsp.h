@@ -10,6 +10,12 @@
 // from the T60 decay time. The "pipe" model inverts the reflection, which leaves only odd
 // harmonics and halves the loop length. The tuning compensates for the phase delay of the
 // loop filters at the fundamental, so notes stay in tune across brightness/stiffness.
+//
+// Reed and Brass are self-oscillating exciters: instead of adding energy to the loop, a
+// nonlinear junction at the mouthpiece reacts to the wave coming back down the bore.
+//   Reed : pressure-controlled reed reflection (clarinet-style), half-period bore
+//   Brass: resonant lip valve tuned near the note, full-period bore
+// Breath pressure follows the note (attack = Exciter Length, level from velocity).
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +38,8 @@ enum class Exciter : int
     kMallet,    // smooth raised-cosine strike
     kClick,     // impulse
     kBow,       // continuous noise while the note is held (bow / breath)
+    kReed,      // self-oscillating reed valve (clarinet / sax-like)
+    kBrass,     // self-oscillating lip valve (trumpet / horn-like)
     kCount
 };
 
@@ -76,6 +84,35 @@ struct Params
     float glideSec = 0.0f;
     float gain = 1.0f;
 };
+
+inline bool isDriven(Exciter e)
+{
+    return e == Exciter::kReed || e == Exciter::kBrass;
+}
+
+// reed stiffness (magnitude of the reed-table slope) for Exciter Tone 0..1
+inline float reedStiffness(float tone)
+{
+    return 0.18f + 0.22f * tone;
+}
+
+// Brass pitch correction (cents) for Exciter Tone, measured on the model: the lip valve pulls
+// the pitch slightly sharp, most at the extremes of lip tension.
+inline float brassPitchCorrectionCents(float tone)
+{
+    constexpr float kTone[] = { 0.0f, 0.3f, 0.5f, 0.7f, 1.0f };
+    constexpr float kCents[] = { 22.0f, 13.0f, 3.0f, 11.0f, 42.0f };
+    tone = std::clamp(tone, 0.0f, 1.0f);
+    for (int i = 1; i < 5; i++)
+    {
+        if (tone <= kTone[i])
+        {
+            const float t = (tone - kTone[i - 1]) / (kTone[i] - kTone[i - 1]);
+            return kCents[i - 1] + t * (kCents[i] - kCents[i - 1]);
+        }
+    }
+    return kCents[4];
+}
 
 // small helpers ------------------------------------------------------------------------
 inline float fastTanh(float x)
@@ -141,28 +178,67 @@ class Resonator
         write = 0;
         lp = 0.0f;
         ap1x = ap1y = ap2x = ap2y = 0.0f;
+        lipY1 = lipY2 = 0.0f;
+        jDcX = jDcY = 0.0f;
+        avgPrev = 0.0f;
     }
 
     // Called once per block. delay is ramped to the new target over the block.
     void prepare(float freqHz, const Params& p, float t60, int blockSize)
     {
         const bool pipe = p.model == Model::kPipe;
-        const float loopsPerPeriod = pipe ? 2.0f : 1.0f;
+        const bool reed = p.exciter == Exciter::kReed;
+        const bool brass = p.exciter == Exciter::kBrass;
+        if (brass)
+        {
+            freqHz *= std::exp2(-brassPitchCorrectionCents(p.excTone) / 1200.0f);
+        }
+        // reed: closed at the reed, open at the bell -> half-period loop, the inversion is in
+        // the junction. brass: bore modes at multiples of f/2 (two-period loop); the lip
+        // resonance picks the mode at the note.
+        const float loopsPerPeriod = reed ? 2.0f : (brass ? 0.5f : (pipe ? 2.0f : 1.0f));
+        const float tone = std::clamp(p.excTone, 0.0f, 1.0f);
 
         freqHz = std::clamp(freqHz, 8.0f, 8000.0f);
         const float w = 2.0f * kPi * freqHz / kSampleRate;
 
-        // damping lowpass: cutoff 400 Hz .. 16 kHz, a = exp(-2 pi fc / fs)
-        const float fc = 400.0f * std::pow(40.0f, std::clamp(p.brightness, 0.0f, 1.0f));
-        lpA = std::exp(-2.0f * kPi * std::min(fc, 16000.0f) / kSampleRate);
+        // Damping (Brightness 0..1):
+        //  0.5..1: two-point averager (classic Karplus-Strong), nearly lossless at the
+        //          fundamental, so Decay is accurate even for high notes
+        //  0..0.5: plus a one-pole lowpass tracking the note (3x .. 32x the fundamental) for
+        //          muffled / palm-muted tones, which then also decay faster
+        const float b = std::clamp(p.brightness, 0.0f, 1.0f);
+        avgS = 0.5f * (1.0f - b);
+        if (b < 0.5f)
+        {
+            const float x = b / 0.5f;
+            const float fc = std::min(freqHz * (3.0f + 29.0f * x * x), 16000.0f);
+            lpA = std::exp(-2.0f * kPi * fc / kSampleRate);
+        }
+        else
+        {
+            lpA = 0.0f;
+        }
 
         apC = -0.65f * std::clamp(p.stiffness, 0.0f, 1.0f);
 
-        float filterDelay = onePoleDelay(lpA, w);
+        const float co = std::cos(w);
+        const float sn = std::sin(w);
+
+        // averager (1-S) + S z^-1: phase delay and magnitude at the fundamental
+        float filterDelay = -std::atan2(-avgS * sn, (1.0f - avgS) + avgS * co) / w;
+        float filterMag =
+          std::sqrt((1.0f - avgS) * (1.0f - avgS) + avgS * avgS + 2.0f * avgS * (1.0f - avgS) * co);
+        if (lpA > 0.0f)
+        {
+            filterDelay += onePoleDelay(lpA, w);
+            filterMag *= (1.0f - lpA) / std::sqrt(1.0f - 2.0f * lpA * co + lpA * lpA);
+        }
         if (apC != 0.0f)
         {
             filterDelay += 2.0f * allpassDelay(apC, w);
         }
+        const bool driven = reed || brass;
 
         float target = kSampleRate / (freqHz * loopsPerPeriod) - filterDelay;
         target = std::clamp(target, 3.0f, static_cast<float>(kMaxDelay - 4));
@@ -173,13 +249,39 @@ class Resonator
         }
         delayStep = (target - delay) / static_cast<float>(blockSize);
 
-        // loop gain for the T60 decay: 10^(-3 / (T60 * f)) per period
+        // loop gain for the T60 decay: 10^(-3 / (T60 * f)) per period. For the passive
+        // exciters the damping filter's loss at the fundamental is made up as far as possible
+        // without the loop gain exceeding 1 (always stable): bright and mid settings decay as
+        // set at every pitch, very dark settings decay faster on high notes.
         const float exponent = -9.9657843f / (std::max(t60, 0.01f) * freqHz * loopsPerPeriod);
-        gain = std::min(std::exp2(exponent), 0.99995f);
-        if (pipe)
+        gain = std::exp2(exponent);
+        if (!driven)
+        {
+            gain /= std::max(filterMag, 0.05f);
+        }
+        gain = std::min(gain, 0.9999f);
+        if (brass)
+        {
+            gain = std::min(gain, kBrassMaxBoreGain); // lip valve needs some bore loss to speak
+        }
+        if (pipe && !reed && !brass)
         {
             gain = -gain;
         }
+
+        // reed: stiffer reed (higher tone) -> brighter, buzzier. The breath pressure is scaled
+        // in the exciter so stiffness x pressure stays where the reed speaks.
+        reedSlope = -reedStiffness(tone);
+        // brass: lip resonance relative to the note. Kept in the range where the instrument
+        // speaks close to pitch: lower tone = slacker lips (softer), higher = tighter (brassier).
+        // Constant-Q resonator with normalised peak gain, so it behaves the same at all pitches.
+        const float lipFreq =
+          std::clamp(freqHz * (0.88f + 0.12f * tone), 20.0f, 0.45f * kSampleRate);
+        const float wl = 2.0f * kPi * lipFreq / kSampleRate;
+        const float r = 1.0f - kPi * (lipFreq / kLipQ) / kSampleRate;
+        lipA1 = 2.0f * r * std::cos(wl);
+        lipA2 = -r * r;
+        lipNorm = kLipPeakGain * (1.0f - r) * 2.0f * std::sin(wl);
 
         driveK = 1.0f + 7.0f * std::clamp(p.drive, 0.0f, 1.0f);
         useDrive = p.drive > 0.001f;
@@ -188,6 +290,48 @@ class Resonator
     float absGain() const { return std::fabs(gain); }
 
     inline float process(float excitation)
+    {
+        float read;
+        const float s = readAndFilter(read);
+        push(s * gain + excitation);
+        return read;
+    }
+
+    // Reed / Brass: the excitation is a nonlinear junction driven by breath pressure
+    inline float processDriven(Exciter type, float breath)
+    {
+        float read;
+        const float bore = readAndFilter(read) * std::fabs(gain);
+        float in;
+
+        if (type == Exciter::kReed)
+        {
+            // wave returning from the open bell is inverted
+            const float pd = -bore - breath;
+            const float reflection = std::clamp(0.7f + reedSlope * pd, -1.0f, 1.0f);
+            in = breath + pd * reflection;
+        }
+        else
+        {
+            const float mouth = 0.3f * breath;
+            float lip = lipNorm * (mouth - bore) + lipA1 * lipY1 + lipA2 * lipY2;
+            lipY2 = lipY1;
+            lipY1 = lip;
+            lip = std::min(lip * lip, 1.0f); // lip opening
+            in = lip * mouth + (1.0f - lip) * bore;
+            // DC blocker in the loop (the lip valve rectifies)
+            const float y = in - jDcX + 0.995f * jDcY;
+            jDcX = in;
+            jDcY = y;
+            in = y;
+        }
+
+        push(in);
+        return read;
+    }
+
+  private:
+    inline float readAndFilter(float& readOut)
     {
         delay += delayStep;
 
@@ -225,8 +369,13 @@ class Resonator
         const float read = ((c3 * t + c2) * t + c1) * t + x0;
 
         // damping
-        lp = (1.0f - lpA) * read + lpA * lp;
-        float s = lp;
+        float s = (1.0f - avgS) * read + avgS * avgPrev;
+        avgPrev = read;
+        if (lpA > 0.0f)
+        {
+            lp = (1.0f - lpA) * s + lpA * lp;
+            s = lp;
+        }
 
         // stiffness
         if (apC != 0.0f)
@@ -245,16 +394,20 @@ class Resonator
             s = fastTanh(s * driveK) / driveK;
         }
 
-        s = std::clamp(s * gain + excitation, -4.0f, 4.0f);
-        line[write] = s;
+        readOut = read;
+        return s;
+    }
+
+    inline void push(float value)
+    {
+        line[write] = std::clamp(value, -4.0f, 4.0f);
         if (++write >= kMaxDelay)
         {
             write = 0;
         }
-
-        return read;
     }
 
+  public:
     float currentDelay() const { return delay; }
 
   private:
@@ -269,6 +422,15 @@ class Resonator
     float gain = 0.99f;
     float driveK = 1.0f;
     bool useDrive = false;
+    // junctions
+    float reedSlope = -0.3f;
+    float lipA1 = 0.0f, lipA2 = 0.0f, lipY1 = 0.0f, lipY2 = 0.0f, lipNorm = 0.0f;
+    static constexpr float kLipQ = 15.0f;
+    static constexpr float kLipPeakGain = 15.0f;
+    static constexpr float kBrassMaxBoreGain = 0.9f;
+    float jDcX = 0.0f, jDcY = 0.0f;
+    float avgS = 0.25f;
+    float avgPrev = 0.0f;
 };
 
 //--------------------------------------------------------------------------------------
@@ -289,6 +451,15 @@ class ExciterGen
         t = 0;
         len = std::max(1, static_cast<int>(p.excLengthMs * 0.001f * kSampleRate));
         amp = 0.25f + 0.75f * velocity;
+        if (type == Exciter::kReed)
+        {
+            // breath pressure: stiffness x pressure 0.17 .. 0.28 speaks reliably
+            amp = (0.17f + 0.11f * velocity) / reedStiffness(p.excTone);
+        }
+        else if (type == Exciter::kBrass)
+        {
+            amp = 1.6f + 0.9f * velocity; // breath pressure into the lip valve
+        }
         held = true;
         bowEnv = 0.0f;
         active = true;
@@ -338,6 +509,26 @@ class ExciterGen
             case Exciter::kClick:
                 e = (t == 0) ? 3.0f : 0.0f;
                 break;
+            case Exciter::kReed:
+            case Exciter::kBrass:
+            {
+                // breath pressure envelope plus a little breath noise; no tone filter or
+                // position comb: this drives the junction directly
+                if (held)
+                {
+                    bowEnv = std::min(1.0f, bowEnv + 1.0f / static_cast<float>(len));
+                }
+                else
+                {
+                    bowEnv = std::max(0.0f, bowEnv - 1.0f / (0.04f * kSampleRate));
+                }
+                ++t;
+                if (!held && bowEnv <= 0.0f)
+                {
+                    active = false;
+                }
+                return amp * bowEnv * (1.0f + 0.03f * noise.next());
+            }
             case Exciter::kBow:
             default:
             {
@@ -494,8 +685,9 @@ class StringVoiceDsp
             res2.prepare(freq2, p, t60, n);
         }
 
+        const bool driven = isDriven(p.exciter);
         exciter.setBowScale(res1.absGain());
-        exciter.setPositionDelay(p.position > 0.01f
+        exciter.setPositionDelay(!driven && p.position > 0.01f
                                    ? static_cast<int>(p.position * res1.currentDelay())
                                    : 0);
 
@@ -504,16 +696,31 @@ class StringVoiceDsp
         const float bodyQ = 0.35f;
         const float bodyMix = p.body * 2.5f;
         const float level2 = p.res2Level;
-        const float outGain = p.gain * 0.8f;
+        // sustained reed / brass tones are trimmed to sit closer to the plucked exciters
+        const float exciterTrim =
+          p.exciter == Exciter::kReed ? 0.6f : (p.exciter == Exciter::kBrass ? 0.8f : 1.0f);
+        const float outGain = p.gain * 0.8f * exciterTrim;
 
         float peak = 0.0f;
         for (int i = 0; i < n; i++)
         {
             const float e = exciter.next();
-            float s = res1.process(e);
-            if (useRes2)
+            float s;
+            if (driven)
             {
-                s = (s + level2 * res2.process(e)) / (1.0f + 0.5f * level2);
+                s = res1.processDriven(p.exciter, e);
+                if (useRes2)
+                {
+                    s = (s + level2 * res2.processDriven(p.exciter, e)) / (1.0f + 0.5f * level2);
+                }
+            }
+            else
+            {
+                s = res1.process(e);
+                if (useRes2)
+                {
+                    s = (s + level2 * res2.process(e)) / (1.0f + 0.5f * level2);
+                }
             }
 
             if (bodyMix > 0.0f)

@@ -3,7 +3,9 @@
 
 #include "StringSynthVoice.h"
 #include "PolySynth/sdk/SynthVoiceSDK.h"
+#include "PolySynth/PatchStore.h"
 #include "StringSynthDsp.h"
+#include "StringSynthPresets.h"
 
 #include <cr_section_macros.h>
 
@@ -18,40 +20,10 @@ namespace polysynth
 namespace
 {
 
-enum class StngParamId : int
-{
-    // Exciter
-    kExciter = 0,
-    kExcTone,
-    kExcLength,
-    kPosition,
-    kVelToTone,
-    // String
-    kModel,
-    kDecay,
-    kBrightness,
-    kStiffness,
-    kRelease,
-    // String 2
-    kStr2Tune,
-    kStr2Fine,
-    kStr2Level,
-    // Tone
-    kDrive,
-    kBody,
-    kBodyFreq,
-    // Modulation
-    kDrift,
-    kDriftRate,
-    // Voice
-    kTune,
-    kFine,
-    kGlide,
-    kLegato,
-    kVolume,
-};
+using StngParamId = stng::ParamId;
 
-constexpr std::array<const char*, 4> kExciterNames = { "Pluck", "Mallet", "Click", "Bow" };
+constexpr std::array<const char*, 6> kExciterNames = { "Pluck", "Mallet", "Click",
+                                                       "Bow",   "Reed",   "Brass" };
 constexpr std::array<const char*, 2> kModelNames = { "String", "Pipe" };
 constexpr std::array<const char*, 2> kOffOnNames = { "Off", "On" };
 
@@ -558,6 +530,24 @@ class StringSynthVoice : public sdk::CustomSynthVoice<StringSynthVoice, StngPara
     stng::StringVoiceDsp dsp;
     int poolSlot = -1;
 };
+
+void createStringSynthPresets(PatchStore& store)
+{
+    for (const auto& preset : stng::kPresets)
+    {
+        auto patch = store.createPatch(static_cast<int>(InstrumentTypeId::kStringSynth));
+        if (!patch)
+        {
+            return;
+        }
+        for (const auto& value : preset.values)
+        {
+            patch->setParamValue(
+              static_cast<int>(value.id), value.value, Patch::ParamChangeSource::kPatchAssign);
+        }
+        store.savePatch(preset.name, *patch);
+    }
+}
 
 std::unique_ptr<InstrumentType> createStringSynth()
 {
