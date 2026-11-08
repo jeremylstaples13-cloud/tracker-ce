@@ -15,6 +15,7 @@
 
 #ifdef STEP_SEQ_ENABLED
 void functStepSeqToggle();
+void stepSeqStockEncoder(int16_t value); // the pattern editor's normal encoder handler
 #endif
 
 uint8_t isMultiSelection();

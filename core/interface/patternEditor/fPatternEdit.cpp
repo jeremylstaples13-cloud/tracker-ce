@@ -4193,6 +4193,13 @@ void cPatternEditor::loadPatternsStatus()
     }
 }
 
+#ifdef STEP_SEQ_ENABLED
+void stepSeqStockEncoder(int16_t value)
+{
+    functEncoder(value);
+}
+#endif
+
 void cPatternEditor::lightUpPadBoard()
 {
 #ifdef STEP_SEQ_ENABLED

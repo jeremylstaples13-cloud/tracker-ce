@@ -8,8 +8,17 @@
 // entered note with the selected instrument, tapping a filled step clears it.
 // Up/Down move the 32-step window, Left/Right change track, screen button 8 exits.
 //
-// Edits go through the regular Sequencer::setSelection* / clearSelected paths so undo,
-// "pattern changed" flags and the pattern file format (version 6) are unchanged.
+// Hold-and-tap (same column mapping as the regular pattern editor):
+//   hold Vol         -> Fx1 column (step.fx[1]) with the last used effect
+//   hold Fx          -> Fx2 column (step.fx[0]) with the last used effect
+//   hold Note + Vol  -> micromove (m)
+//   hold Note + Fx   -> volume (V)
+// Tapping a step that already has that effect/value clears it. While holding, the encoder
+// sets the value and updates the steps tapped during the current hold.
+//
+// Notes go through Sequencer::setSelectionNote / clearSelected; effect writes store an undo
+// revision and set the "pattern changed" flag the same way. Pattern file format (version 6)
+// is unchanged.
 
 #include "patternEditor/patternEditor.h"
 
@@ -43,6 +52,31 @@ static bool stepSeqLabelShift = false;
 
 static char stepSeqWindowText[12];
 static char stepSeqBankText[12];
+static char stepSeqTargetText[12];
+static char stepSeqValueText[12];
+
+enum StepSeqTarget : uint8_t
+{
+    kTargetNone = 0,
+    kTargetFx1,    // Vol button: step.fx[1]
+    kTargetFx2,    // Fx button:  step.fx[0]
+    kTargetMicro,  // Note + Vol
+    kTargetVolume, // Note + Fx
+};
+
+static bool noteHeld = false;
+static bool volHeld = false;
+static bool fxHeld = false;
+
+static uint8_t heldTarget = kTargetNone;
+static uint32_t heldTapped = 0; // window-relative steps written during the current hold
+static uint16_t heldWindow = 0;
+static uint8_t heldTrack = 0;
+
+static uint8_t fxNameIdx = 0; // index into interfaceGlobals.fxIDs / fxNames
+static int16_t fxValue = 0;
+static int16_t microValue = 0;
+static int16_t volumeValue = 100;
 
 static void functStepSeqPads(uint8_t pad, uint8_t state, int16_t velo);
 static void functStepSeqShift(uint8_t state);
@@ -50,7 +84,9 @@ static void functStepSeqUp();
 static void functStepSeqDown();
 static void functStepSeqLeft();
 static void functStepSeqRight();
-static void functStepSeqParamButton(uint8_t state);
+static void functStepSeqParamButton(uint8_t button, uint8_t state);
+static void functStepSeqEncoder(int16_t value);
+static void showStepSeqTargetLabel();
 
 //------------------------------------------------------------------------------
 static inline uint8_t stepIndexToPad(uint8_t idx)
@@ -103,6 +139,101 @@ static bool isInstrumentPresent(int instrument)
 }
 
 //------------------------------------------------------------------------------
+// hold-and-tap targets
+
+static inline uint8_t fxSlotForTarget(uint8_t target)
+{
+    return target == kTargetFx1 ? 1 : 0;
+}
+
+static bool isFxTarget(uint8_t target)
+{
+    return target == kTargetFx1 || target == kTargetFx2;
+}
+
+static uint8_t computeTarget()
+{
+    if (volHeld)
+    {
+        return noteHeld ? kTargetMicro : kTargetFx1;
+    }
+    if (fxHeld)
+    {
+        return noteHeld ? kTargetVolume : kTargetFx2;
+    }
+    return kTargetNone;
+}
+
+static void initTargetValue(uint8_t target)
+{
+    if (!isFxTarget(target))
+    {
+        return;
+    }
+
+    // last effect used in the editor; fall back to the first real effect if there is none
+    fxNameIdx = PTE->getPreviousUsedFx();
+    if (fxNameIdx == 0 || fxNameIdx >= interfaceGlobals.fxNameCount())
+    {
+        fxNameIdx = 2;
+    }
+
+    uint8_t type = interfaceGlobals.fxNameToId(fxNameIdx);
+    fxValue = clamp<int>(
+      PTE->getPreviousUsedFxValue(), sequencer.getFxMin(type), sequencer.getFxMax(type));
+}
+
+static bool stepHasTarget(Sequencer::strPattern::strTrack::strStep* step, uint8_t target)
+{
+    switch (target)
+    {
+        case kTargetFx1:
+        case kTargetFx2:
+            return step->fx[fxSlotForTarget(target)].type ==
+                   interfaceGlobals.fxNameToId(fxNameIdx);
+        case kTargetMicro: return step->micromove >= 0;
+        case kTargetVolume: return step->volume >= 0;
+        default: return false;
+    }
+}
+
+static void writeTarget(Sequencer::strPattern::strTrack::strStep* step, uint8_t target)
+{
+    switch (target)
+    {
+        case kTargetFx1:
+        case kTargetFx2:
+        {
+            auto& fx = step->fx[fxSlotForTarget(target)];
+            fx.type = interfaceGlobals.fxNameToId(fxNameIdx);
+            fx.value = fxValue;
+            break;
+        }
+        case kTargetMicro: step->micromove = microValue; break;
+        case kTargetVolume: step->volume = volumeValue; break;
+        default: break;
+    }
+}
+
+static void clearTarget(Sequencer::strPattern::strTrack::strStep* step, uint8_t target)
+{
+    switch (target)
+    {
+        case kTargetFx1:
+        case kTargetFx2:
+        {
+            auto& fx = step->fx[fxSlotForTarget(target)];
+            fx.type = 0;
+            fx.value = 0;
+            break;
+        }
+        case kTargetMicro: step->micromove = -1; break;
+        case kTargetVolume: step->volume = Sequencer::STEP_VELO_DEFAULT; break;
+        default: break;
+    }
+}
+
+//------------------------------------------------------------------------------
 void functStepSeqToggle()
 {
     if (PTE->stepSeqActive)
@@ -130,6 +261,9 @@ void cPatternEditor::enterStepSeq()
 
     stepSeqActive = true;
     stepSeqShiftHeld = buttons->isButtonPressed(interfaceButtonShift);
+    noteHeld = volHeld = fxHeld = false;
+    heldTarget = kTargetNone;
+    heldTapped = 0;
 
     // note input by default, with the currently selected instrument
     editParam = EditNote;
@@ -155,6 +289,9 @@ void cPatternEditor::exitStepSeq(bool restoreScreen)
 
     stepSeqActive = false;
     stepSeqShiftHeld = false;
+    noteHeld = volHeld = fxHeld = false;
+    heldTarget = kTargetNone;
+    heldTapped = 0;
 
     stepSeqInvalidateLeds();
 
@@ -180,12 +317,13 @@ void cPatternEditor::setStepSeqFunct()
     ip->setButtonObj(interfaceButtonLeft, buttonPress, functStepSeqLeft);
     ip->setButtonObj(interfaceButtonRight, buttonPress, functStepSeqRight);
 
-    // Note/Instr/Vol/Fx: no column switching or popups in step mode.
-    // Holding Fx buttons to apply effects to tapped steps comes next.
+    // Note/Vol/Fx are hold modifiers in step mode (no column switching or popups)
     ip->setButtonObj(interfaceButtonNote, functStepSeqParamButton);
     ip->setButtonObj(interfaceButtonInstr, functStepSeqParamButton);
     ip->setButtonObj(interfaceButtonVol, functStepSeqParamButton);
     ip->setButtonObj(interfaceButtonFx, functStepSeqParamButton);
+
+    ip->setPotObj(interfacePot0, functStepSeqEncoder);
 }
 
 uint16_t cPatternEditor::stepSeqWindowStart()
@@ -229,6 +367,9 @@ void cPatternEditor::showStepSeqLabels()
     display.setControlColors(label[1], display.getTheme().activeLabelsColors);
     display.setControlColors(label[7], display.getTheme().activeButtonLabelsColors);
 
+    display.setControlText(label[2], stepSeqTargetText);
+    display.setControlText2(label[2], stepSeqValueText);
+
     for (uint8_t i = 0; i < 8; i++)
     {
         display.setControlValue(label[i], 1);
@@ -240,6 +381,45 @@ void cPatternEditor::showStepSeqLabels()
         display.refreshControl(label[i]);
     }
 
+    showStepSeqTargetLabel();
+}
+
+// Label 3 shows what holding Vol/Fx (and Note) will write. Only this one control is
+// redrawn on button holds and encoder turns.
+static void showStepSeqTargetLabel()
+{
+    switch (heldTarget)
+    {
+        case kTargetFx1:
+        case kTargetFx2:
+            snprintf(stepSeqTargetText,
+                     sizeof(stepSeqTargetText),
+                     "%s",
+                     heldTarget == kTargetFx1 ? "Fx1" : "Fx2");
+            snprintf(stepSeqValueText,
+                     sizeof(stepSeqValueText),
+                     "%c %d",
+                     interfaceGlobals.fxNames[fxNameIdx][0],
+                     fxValue);
+            break;
+        case kTargetMicro:
+            snprintf(stepSeqTargetText, sizeof(stepSeqTargetText), "Micro");
+            snprintf(stepSeqValueText, sizeof(stepSeqValueText), "%d", microValue);
+            break;
+        case kTargetVolume:
+            snprintf(stepSeqTargetText, sizeof(stepSeqTargetText), "Volume");
+            snprintf(stepSeqValueText, sizeof(stepSeqValueText), "%d", volumeValue);
+            break;
+        default:
+            stepSeqTargetText[0] = 0;
+            stepSeqValueText[0] = 0;
+            break;
+    }
+
+    display.setControlColors(PTE->label[2],
+                             heldTarget != kTargetNone ? display.getTheme().activeLabelsColors
+                                                       : display.getTheme().inactiveLabelsColors);
+    display.refreshControl(PTE->label[2]);
     display.synchronizeRefresh();
 }
 
@@ -282,11 +462,12 @@ void cPatternEditor::stepSeqLightPads()
             break;
         }
 
-        uint8_t level = 0;
-        if (!pattern->track[track].step[step].isNoteEmpty())
-        {
-            level = lightOn;
-        }
+        // while Vol/Fx is held, show which steps have that value instead of notes
+        Sequencer::strPattern::strTrack::strStep* stepData = &pattern->track[track].step[step];
+        bool lit = heldTarget != kTargetNone ? stepHasTarget(stepData, heldTarget)
+                                             : !stepData->isNoteEmpty();
+
+        uint8_t level = lit ? lightOn : 0;
         if (playing && step == trackerPattern.playheadPosition)
         {
             level = lightBright;
@@ -350,6 +531,42 @@ static void stepSeqToggleStep(uint16_t step)
     PTE->refreshPattern();
 }
 
+static void stepSeqApplyTarget(uint16_t step)
+{
+    const uint8_t track = PTE->trackerPattern.actualTrack;
+    const uint16_t window = PTE->stepSeqWindowStart();
+    Sequencer::strPattern::strTrack::strStep* stepData =
+      &sequencer.getPatternToUI()->track[track].step[step];
+
+    if (window != heldWindow || track != heldTrack)
+    {
+        heldTapped = 0;
+        heldWindow = window;
+        heldTrack = track;
+    }
+
+    const uint32_t bit = uint32_t(1) << (step - window);
+
+    newFileManager.storePatternUndoRevision();
+
+    if ((heldTapped & bit) || stepHasTarget(stepData, heldTarget))
+    {
+        clearTarget(stepData, heldTarget);
+        heldTapped &= ~bit;
+    }
+    else
+    {
+        writeTarget(stepData, heldTarget);
+        heldTapped |= bit;
+    }
+
+    newFileManager.setActualPatternStructChanged();
+
+    PTE->trackerPattern.actualStep = step;
+    PTE->focusOnActual();
+    PTE->refreshPattern();
+}
+
 static void functStepSeqPads(uint8_t pad, uint8_t state, int16_t velo)
 {
     (void)velo;
@@ -370,7 +587,14 @@ static void functStepSeqPads(uint8_t pad, uint8_t state, int16_t velo)
             return;
         }
 
-        stepSeqToggleStep(step);
+        if (heldTarget != kTargetNone)
+        {
+            stepSeqApplyTarget(step);
+        }
+        else
+        {
+            stepSeqToggleStep(step);
+        }
     }
     else
     {
@@ -443,9 +667,80 @@ static void functStepSeqRight()
     PTE->nextTrack();
 }
 
-static void functStepSeqParamButton(uint8_t state)
+static void functStepSeqParamButton(uint8_t button, uint8_t state)
 {
-    (void)state;
+    if (state != buttonPress && state != buttonRelease)
+    {
+        return;
+    }
+
+    const bool pressed = state == buttonPress;
+
+    switch (button)
+    {
+        case interfaceButtonNote: noteHeld = pressed; break;
+        case interfaceButtonVol: volHeld = pressed; break;
+        case interfaceButtonFx: fxHeld = pressed; break;
+        default: return; // Instr: no function in step mode
+    }
+
+    uint8_t target = computeTarget();
+    if (target == heldTarget)
+    {
+        return;
+    }
+
+    heldTarget = target;
+    heldTapped = 0;
+    initTargetValue(target);
+
+    showStepSeqTargetLabel();
+    PTE->stepSeqLightPads();
+}
+
+static void functStepSeqEncoder(int16_t value)
+{
+    if (heldTarget == kTargetNone)
+    {
+        stepSeqStockEncoder(value);
+        return;
+    }
+
+    switch (heldTarget)
+    {
+        case kTargetFx1:
+        case kTargetFx2:
+        {
+            uint8_t type = interfaceGlobals.fxNameToId(fxNameIdx);
+            fxValue =
+              clamp<int>(fxValue + value, sequencer.getFxMin(type), sequencer.getFxMax(type));
+            PTE->setPreviousUsedFxValue(fxValue);
+            break;
+        }
+        case kTargetMicro: microValue = clamp<int>(microValue + value, 0, 100); break;
+        case kTargetVolume: volumeValue = clamp<int>(volumeValue + value, 0, 100); break;
+        default: break;
+    }
+
+    // update the steps tapped during this hold, if still on the same window and track
+    if (heldTapped != 0 && heldWindow == PTE->stepSeqWindowStart() &&
+        heldTrack == PTE->trackerPattern.actualTrack)
+    {
+        Sequencer::strPattern::strTrack* trackData = &sequencer.getPatternToUI()->track[heldTrack];
+
+        newFileManager.storePatternUndoRevision();
+        for (uint8_t i = 0; i < cPatternEditor::kStepSeqSteps; i++)
+        {
+            if (heldTapped & (uint32_t(1) << i))
+            {
+                writeTarget(&trackData->step[heldWindow + i], heldTarget);
+            }
+        }
+        newFileManager.setActualPatternStructChanged();
+        PTE->refreshPattern();
+    }
+
+    showStepSeqTargetLabel();
 }
 
 #endif // STEP_SEQ_ENABLED
