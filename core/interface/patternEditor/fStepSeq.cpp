@@ -15,7 +15,8 @@
 //   hold Note + Vol  -> micromove (m)
 //   hold Note + Fx   -> volume (V)
 // Tapping a step that already has that effect/value clears it. While holding, the encoder
-// sets the value and updates the steps tapped during the current hold.
+// sets the value and updates the steps tapped during the current hold; with Vol/Fx held,
+// Shift + encoder picks the effect instead.
 //
 // Notes go through Sequencer::setSelectionNote / clearSelected; effect writes store an undo
 // revision and set the "pattern changed" flag the same way. Pattern file format (version 6)
@@ -64,6 +65,9 @@ enum StepSeqTarget : uint8_t
     kTargetMicro,  // Note + Vol
     kTargetVolume, // Note + Fx
 };
+
+static constexpr uint8_t kSelectableFxCount = FX_COUNT - FX_COUNT_HIDDEN_FXes;
+static constexpr uint8_t kFallbackFxIdx = 2; // "V - Volume/Velocity"
 
 static bool noteHeld = false;
 static bool volHeld = false;
@@ -174,9 +178,6 @@ static void initTargetValue(uint8_t target)
 
     // last effect used in the editor (index into the effect list, like the Fx popup);
     // fall back to Volume if none has been picked yet
-    constexpr uint8_t kSelectableFxCount = FX_COUNT - FX_COUNT_HIDDEN_FXes;
-    constexpr uint8_t kFallbackFxIdx = 2; // "V - Volume/Velocity"
-
     fxNameIdx = PTE->getPreviousUsedFx();
     if (fxNameIdx == 0 || fxNameIdx >= kSelectableFxCount)
     {
@@ -397,16 +398,18 @@ static void showStepSeqTargetLabel()
     {
         case kTargetFx1:
         case kTargetFx2:
+        {
+            // effect names look like "P - Panning"; show the part after the code
+            const char* fxName = interfaceGlobals.fxNames[fxNameIdx];
+            const char* dash = strstr(fxName, " - ");
             snprintf(stepSeqTargetText,
                      sizeof(stepSeqTargetText),
-                     "%s",
-                     heldTarget == kTargetFx1 ? "Fx1" : "Fx2");
-            snprintf(stepSeqValueText,
-                     sizeof(stepSeqValueText),
-                     "%c %d",
-                     interfaceGlobals.fxNames[fxNameIdx][0],
+                     "%s %d",
+                     heldTarget == kTargetFx1 ? "Fx1" : "Fx2",
                      fxValue);
+            snprintf(stepSeqValueText, sizeof(stepSeqValueText), "%s", dash ? dash + 3 : fxName);
             break;
+        }
         case kTargetMicro:
             snprintf(stepSeqTargetText, sizeof(stepSeqTargetText), "Micro");
             snprintf(stepSeqValueText, sizeof(stepSeqValueText), "%d", microValue);
@@ -742,9 +745,25 @@ static void functStepSeqEncoder(int16_t value)
         case kTargetFx1:
         case kTargetFx2:
         {
-            uint8_t type = interfaceGlobals.fxNameToId(fxNameIdx);
-            fxValue =
-              clamp<int>(fxValue + value, sequencer.getFxMin(type), sequencer.getFxMax(type));
+            if (stepSeqShiftHeld)
+            {
+                // Shift + encoder: pick the effect, one list entry per detent (the input
+                // processor boosts encoder steps while Shift is held, so use the sign only)
+                int idx = clamp<int>(fxNameIdx + (value > 0 ? 1 : -1), 1, kSelectableFxCount - 1);
+                if (idx == fxNameIdx)
+                {
+                    return;
+                }
+                fxNameIdx = idx;
+                fxValue = sequencer.getFxDefault(interfaceGlobals.fxNameToId(fxNameIdx));
+                PTE->setPreviousUsedFx(fxNameIdx);
+            }
+            else
+            {
+                uint8_t type = interfaceGlobals.fxNameToId(fxNameIdx);
+                fxValue =
+                  clamp<int>(fxValue + value, sequencer.getFxMin(type), sequencer.getFxMax(type));
+            }
             PTE->setPreviousUsedFxValue(fxValue);
             break;
         }
