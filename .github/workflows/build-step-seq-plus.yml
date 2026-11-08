@@ -1,0 +1,46 @@
+name: Build Tracker+ (Step Seq Mode)
+
+# Builds only the Tracker+ firmware with the step-sequencer mode enabled.
+# Runs on every push to the feature branch, or manually from the Actions tab.
+
+on:
+  push:
+    branches: [ feature/step-seq-mode ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-plus:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache GNU Arm Embedded Toolchain 10.3-2021.10
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: agt/10.3
+          key: arm-none-eabi-10.3-2021.10-linux-x86_64
+
+      - name: Install GNU Arm Embedded Toolchain 10.3-2021.10
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget bzip2 make
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+          mkdir -p agt/10.3
+          tar -xjf gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2 -C agt/10.3 --strip-components=1
+          rm gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+
+      - name: Build Tracker+ firmware with step sequencer mode
+        run: make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrackerPlus-step-seq-${{ github.sha }}
+          path: build/TrackerPlus_*.ptf
+          if-no-files-found: error
