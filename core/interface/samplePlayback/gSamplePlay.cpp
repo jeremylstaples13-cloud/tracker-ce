@@ -1,4 +1,5 @@
 #include "core/interfacePopups.h"
+#include "SliceFades.h"
 #include "fileManager.h"
 #include "mtAudioEngine.h"
 #include "samplePlayback.h"
@@ -213,7 +214,6 @@ void cSamplePlayback::showDefaultScreen()
                 display.setControlText(label[1], "Slice");
                 display.setControlText(label[2], "No of Slices");
                 display.setControlText(label[3], "Play Thru");
-                display.setControlText(label[4], "");
                 display.setControlText(label[5], "More");
 
                 display.setControlText2(label[0], "Auto");
@@ -228,8 +228,9 @@ void cSamplePlayback::showDefaultScreen()
 
                 showSlicesEqualNumberValue();
                 showSlicesPlayThruValue();
+                showSliceFadeValue();
 
-                if (selectedPlace != 2 && selectedPlace != 3)
+                if (selectedPlace != 2 && selectedPlace != 3 && selectedPlace != 4)
                 {
                     selectedPlace = 2;
                 }
@@ -711,6 +712,39 @@ void cSamplePlayback::showSlicesEqualNumberValue()
     display.setControlText2(label[2], equalSliceNumberText);
     display.setControlShow(label[2]);
     display.refreshControl(label[2]);
+}
+
+void cSamplePlayback::showSliceFadeValue()
+{
+    uint8_t instrIdx = mtProject.values.lastUsedInstrument;
+
+    if (instrIdx < kSampleInstrumentsCount && editorInstrument->sliceNumber > 0)
+    {
+        SliceFades::Fade fade = sliceFades.get(instrIdx, editorInstrument->selectedSlice);
+
+        snprintf(sliceFadeTitleText,
+                 sizeof(sliceFadeTitleText),
+                 "Fade %s %d",
+                 sliceFadeEditOut ? "Out" : "In",
+                 editorInstrument->selectedSlice + 1);
+        snprintf(sliceFadeValueText,
+                 sizeof(sliceFadeValueText),
+                 "%d ms",
+                 sliceFadeEditOut ? fade.outMs : fade.inMs);
+    }
+    else
+    {
+        snprintf(sliceFadeTitleText,
+                 sizeof(sliceFadeTitleText),
+                 "Fade %s",
+                 sliceFadeEditOut ? "Out" : "In");
+        snprintf(sliceFadeValueText, sizeof(sliceFadeValueText), "-");
+    }
+
+    display.setControlText(label[4], sliceFadeTitleText);
+    display.setControlText2(label[4], sliceFadeValueText);
+    display.setControlShow(label[4]);
+    display.refreshControl(label[4]);
 }
 
 void cSamplePlayback::showSlicesPlayThruValue()

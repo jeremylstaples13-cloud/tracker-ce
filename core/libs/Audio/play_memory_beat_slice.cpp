@@ -110,6 +110,8 @@ AUDIO_CORE_FLASH void AudioPlayMemory::playBeatSlice(uint8_t instrIdx, int8_t no
         }
     }
 
+    setupSliceFade(instrIdx, sliceForcedFlag ? forcedSlice : localSlice);
+
     playing = 1;
     AudioInterrupts();
 }

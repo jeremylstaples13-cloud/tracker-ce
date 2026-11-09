@@ -63,6 +63,7 @@ const char cWorkspaceInstrumentFileFormatNew[] = "Workspace/instruments/instrume
 const char cWorkspaceSamplesPath[] = "Workspace/samples";
 const char cWorkspaceSamplesFilesFormat[] = "Workspace/samples/instr%02d.wav";
 const char cWorkspacePatternsMetadataFilePath[] = "Workspace/patterns/patternsMetadata";
+const char cWorkspaceSliceFadesFilePath[] = "Workspace/sliceFades";
 
 const char cDefaultProjectsPath[] = "Projects";
 const char cProjectsPathFormat[] = "%s/%s";
@@ -70,6 +71,7 @@ const char cProjectFileInProjectsFormat[] = "%s/%s/project.mt";
 const char cProjectsPatternsPathFormat[] = "%s/%s/patterns";
 const char cProjectsPatternFileFormat[] = "%s/%s/patterns/pattern_%02d.mtp";
 const char cProjectsPatternsMetadataFileFormat[] = "%s/%s/patterns/patternsMetadata";
+const char cProjectsSliceFadesFileFormat[] = "%s/%s/sliceFades";
 const char cProjectsInstrumentsPathFormat[] = "%s/%s/instruments";
 const char cProjectsInstrumentFileFormatOld[] = "%s/%s/instruments/instrument_%02d.mti";
 const char cProjectsInstrumentFileFormatNew[] = "%s/%s/instruments/%d %s.pti";

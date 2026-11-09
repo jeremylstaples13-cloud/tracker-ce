@@ -1,4 +1,5 @@
 #include "InstrumentDelete.h"
+#include "SliceFades.h"
 
 #include "fileManager.h"
 #include "fileManagerDefs.h"
@@ -88,6 +89,7 @@ void InstrumentDelete::deleteInstrumentFinish()
 {
     for (uint8_t instr = deleteStartIdx; instr <= deleteEndIdx; instr++)
     {
+        sliceFades.clearInstrument(instr);
         if (mtProject.instrument[instr].isActive == 1)
         {
             newFileManager.setDefaultActiveInstrument(&mtProject.instrument[instr]);
@@ -95,6 +97,7 @@ void InstrumentDelete::deleteInstrumentFinish()
         }
     }
 
+    sliceFades.flushWorkspace();
     newFileManager.setStatus(fmDeleteInstrumentsEnd);
     newFileManager.setCurrentOperation(fmNoOperation);
 }

@@ -1,5 +1,6 @@
 #include "Platform.h"
 #include "fileManagerDefs.h"
+#include "SliceFades.h"
 #include "log.h"
 #include "mtAudioEngine.h"
 #include "mtAudioExport.h"
@@ -52,6 +53,7 @@ void cFileManager::init(FileSystem* fileSystem, Synth* synth, bool stereoSampleM
 
     fileTransfer.init(fileSystem);
     patternsMetadata.init(fileSystem);
+    sliceFades.init(fileSystem);
     FileManagerOperation::init(fileSystem);
 
     this->stereoSampleMode = stereoSampleMode;

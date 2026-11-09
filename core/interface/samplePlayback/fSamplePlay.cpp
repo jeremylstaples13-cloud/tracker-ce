@@ -12,6 +12,7 @@
 #include "fileManager.h"
 #include "mtConfig.h"
 #include "mtSliceManager.h"
+#include "SliceFades.h"
 #include "VoiceStreamManager.h"
 #include <cmath>
 
@@ -135,6 +136,11 @@ void cSamplePlayback::update()
     currentAutoSlice = sliceManager.getAutoSliceState();
     if ((currentAutoSlice == 0) && (currentAutoSlice != lastAutoSlice))
     {
+        sliceManager.onAutoSliceFinished();
+        if (slice2ndScreenActive())
+        {
+            showSliceFadeValue();
+        }
         if (mtProject.values.lastUsedInstrument < kSampleInstrumentsCount &&
             mtProject.sampleMemory[mtProject.values.lastUsedInstrument].isStreamed)
         {
@@ -1028,6 +1034,17 @@ static void functButton4(uint8_t state)
     {
         if (SP->sliceScreenMode2)
         {
+            if (state == buttonPress || state == UINT8_MAX)
+            {
+                // Second press on the selected Fade control switches between fade in and out
+                if (state == buttonPress && SP->selectedPlace == 4)
+                {
+                    SP->sliceFadeEditOut = !SP->sliceFadeEditOut;
+                }
+                SP->selectedPlace = 4;
+                SP->showSliceFadeValue();
+                SP->activateLabelsBorder();
+            }
             return;
         }
 
@@ -1247,6 +1264,11 @@ static void functEncoder(int16_t value)
             }
             case 4:
             {
+                if (SP->slice2ndScreenActive())
+                {
+                    SP->modSliceFade(value);
+                    return;
+                }
                 if ((SP->editorInstrument->playMode == playModeSlice) ||
                     (SP->editorInstrument->playMode == playModeBeatSlice))
                 {
@@ -1340,7 +1362,7 @@ static void functLeft()
             {
                 if (SP->sliceScreenMode2)
                 {
-                    SP->selectedPlace = 2;
+                    SP->selectedPlace = 3;
                 }
                 else
                 {
@@ -1381,7 +1403,8 @@ static void functLeft()
             {
                 if (SP->sliceScreenMode2)
                 {
-                    SP->selectedPlace = 3;
+                    SP->selectedPlace = 4;
+                    SP->showSliceFadeValue();
                 }
                 else
                 {
@@ -1481,7 +1504,7 @@ static void functRight()
             if ((SP->editorInstrument->playMode == playModeSlice) ||
                 (SP->editorInstrument->playMode == playModeBeatSlice))
             {
-                SP->selectedPlace = 6;
+                SP->selectedPlace = SP->sliceScreenMode2 ? 4 : 6;
             }
             else if (SP->editorInstrument->playMode == playModeGranular)
             {
@@ -1606,6 +1629,10 @@ static void functUp()
                     {
                         changeZoom(1);
                     }
+                    else
+                    {
+                        SP->modSliceFade(1);
+                    }
                 }
                 else if (SP->editorInstrument->playMode == playModeGranular)
                 {
@@ -1709,6 +1736,10 @@ static void functDown()
                     if (!SP->slice2ndScreenActive())
                     {
                         changeZoom(-1);
+                    }
+                    else
+                    {
+                        SP->modSliceFade(-1);
                     }
                 }
                 else if (SP->editorInstrument->playMode == playModeGranular)
@@ -2287,6 +2318,10 @@ static void modSliceSelect(int16_t value, bool set)
         SP->showSlicesSelectValue();
         SP->showSlicesAdjustValue();
     }
+    else
+    {
+        SP->showSliceFadeValue();
+    }
     SP->refreshSlicePoints = 1;
 }
 
@@ -2604,6 +2639,80 @@ void cSamplePlayback::modEqualSliceNumber(int16_t val)
     saveConfig();
 }
 
+static uint16_t sliceFadeStepUp(uint16_t ms)
+{
+    if (ms < 20)
+        return ms + 1;
+    if (ms < 100)
+        return ms + 5;
+    if (ms < 300)
+        return ms + 10;
+    return ms + 25;
+}
+
+static uint16_t sliceFadeStepDown(uint16_t ms)
+{
+    if (ms == 0)
+        return 0;
+    if (ms <= 20)
+        return ms - 1;
+    if (ms <= 100)
+        return ms - 5;
+    if (ms <= 300)
+        return ms - 10;
+    return ms - 25;
+}
+
+void cSamplePlayback::modSliceFade(int16_t val)
+{
+    uint8_t instrIdx = mtProject.values.lastUsedInstrument;
+    if (instrIdx >= kSampleInstrumentsCount || editorInstrument->sliceNumber == 0)
+    {
+        showSliceFadeValue();
+        return;
+    }
+
+    SliceFades::Fade fade = sliceFades.get(instrIdx, editorInstrument->selectedSlice);
+    uint16_t& ms = sliceFadeEditOut ? fade.outMs : fade.inMs;
+
+    int16_t steps = (val < 0) ? -val : val;
+    for (int16_t i = 0; i < steps; i++)
+    {
+        ms = (val > 0) ? sliceFadeStepUp(ms) : sliceFadeStepDown(ms);
+    }
+    if (ms > SliceFades::kMaxFadeMs)
+        ms = SliceFades::kMaxFadeMs;
+
+    // Shift + knob applies the edited value to every slice
+    if (buttons->isButtonPressed(interfaceButtonShift))
+    {
+        for (uint8_t s = 0; s < editorInstrument->sliceNumber; s++)
+        {
+            SliceFades::Fade other = sliceFades.get(instrIdx, s);
+            (sliceFadeEditOut ? other.outMs : other.inMs) = ms;
+            sliceFades.set(instrIdx, s, other);
+        }
+    }
+    else
+    {
+        sliceFades.set(instrIdx, editorInstrument->selectedSlice, fade);
+    }
+
+    showSliceFadeValue();
+}
+
+void cSamplePlayback::setDefaultSliceFade()
+{
+    uint8_t instrIdx = mtProject.values.lastUsedInstrument;
+    if (instrIdx < kSampleInstrumentsCount && editorInstrument->sliceNumber > 0)
+    {
+        SliceFades::Fade fade = sliceFades.get(instrIdx, editorInstrument->selectedSlice);
+        (sliceFadeEditOut ? fade.outMs : fade.inMs) = 0;
+        sliceFades.set(instrIdx, editorInstrument->selectedSlice, fade);
+    }
+    showSliceFadeValue();
+}
+
 void cSamplePlayback::modSlicePlayThru(int16_t val)
 {
     if (val > 0)
@@ -2631,6 +2740,10 @@ void cSamplePlayback::setDefault(uint8_t pos)
         else if (SP->selectedPlace == 3)
         {
             modSlicePlayThru(-1);
+        }
+        else if (SP->selectedPlace == 4)
+        {
+            setDefaultSliceFade();
         }
         return;
     }

@@ -9,13 +9,14 @@ Repository: `jeremylstaples13-cloud/tracker-ce` (fork of `polyend/tracker-ce`). 
 
 | Branch | Contents |
 | :--- | :--- |
-| `feature/stng-synth` | **Latest — work here.** Step-sequencer mode + STNG synth. Based on `feature/step-seq-mode`. |
+| `feature/slice-fades` | **Latest — work here.** Per-slice fades for the sampler. Based on `feature/stng-synth`. |
+| `feature/stng-synth` | Step-sequencer mode + STNG synth. Based on `feature/step-seq-mode`. |
 | `feature/step-seq-mode` | Step-sequencer mode only. |
 
 ## Building
 
 - **GitHub Actions**: [`.github/workflows/build-step-seq-plus.yml`](../.github/workflows/build-step-seq-plus.yml) builds
-  Tracker+ on every push to either branch with `make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE"` and uploads
+  Tracker+ on every push to any of these branches with `make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE"` and uploads
   `TrackerPlus_JL_1.0.0.ptf` as a run artifact (Actions tab → latest run → Artifacts).
 - **Edition name** is `JL` (`EDITION_NAME` in [`version.mk`](../version.mk)): Config → Firmware shows "1.0.0 JL" and the
   file is `TrackerPlus_JL_<version>.ptf`.
@@ -73,8 +74,29 @@ Registered as `InstrumentTypeId::kStringSynth` ("STNG") with badges in FT812 `RA
   all STNG presets are deleted from it.
 - **Parameter ids** (`stng::ParamId`) are append-only: saved patches store values by id.
 
+## Per-slice fades (Slice / Beat Slice)
+
+Code: [`core/FileManager/SliceFades.{h,cpp}`](../core/FileManager/SliceFades.cpp) (data + file),
+`AudioPlayMemory::setupSliceFade` / `applySliceFade` in `core/libs/Audio/` (playback), hooks in `mtSliceManager.cpp`
+and the Sample Playback screen (`fSamplePlay.cpp` / `gSamplePlay.cpp`).
+
+- **UI**: Sample Playback → Slice / Beat Slice → More (screen 2) → 5th control "Fade In n" / "Fade Out n" (n = selected
+  slice). Press it again to switch In/Out. Knob or Up/Down edits (0–1000 ms; 1 ms steps below 20, then 5 / 10 / 25).
+  Shift + knob applies the value to every slice. Delete resets it to 0. Pick the slice on screen 1 (or with the pads in
+  Beat Slice).
+- **Playback**: a linear gain ramp by playhead position inside the slice: fade-in after the playback start, fade-out
+  before the playback end (swapped in reverse). Times are real time at the note's pitch. Only slice-end cuts are faded,
+  not a slice cut short by a new note on the same track.
+- **Slice edits**: adding a slice copies the fades of the slice it splits; removing shifts them; moving keeps them;
+  Auto / Evenly re-slicing gives every new slice the fades of the slice that was selected.
+- **Storage**: one sidecar file per project, `Workspace/sliceFades` → `Projects/<name>/sliceFades` (copied on project
+  open / save, written with the instrument autosave). `.pti` files are unchanged, so stock firmware ignores the fades.
+  Each instrument record stores a fingerprint of its slice layout; if the slices change outside the slice editor
+  (sample import, instrument load, undo...) the stale fades are ignored and dropped on the next edit.
+
 ## Open ideas
 
 - Step-seq: in Fx modes, the knob with nothing held sets the amount for the next taps, Shift + knob the effect.
+- Slice fades: a short automatic fade when a slice is cut off by a new note on the same track.
 - STNG: replace the noise Bow with a bowed-string friction model and add a flute-style jet for pipes, for steady
   sustains without the breathy flutter.

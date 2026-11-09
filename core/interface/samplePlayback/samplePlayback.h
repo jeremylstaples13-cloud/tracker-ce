@@ -119,6 +119,9 @@ class cSamplePlayback : public ModuleBase
 
     void modEqualSliceNumber(int16_t val);
     void modSlicePlayThru(int16_t val);
+    void modSliceFade(int16_t val);
+    void setDefaultSliceFade();
+    void showSliceFadeValue();
     bool slice2ndScreenActive();
 
     void setDefault(uint8_t pos);
@@ -192,6 +195,9 @@ class cSamplePlayback : public ModuleBase
 
     char sliceSelectTextValue[11];
     char sliceAdjustTextValue[9];
+    char sliceFadeTitleText[16];
+    char sliceFadeValueText[16];
+    bool sliceFadeEditOut = false; // Fade control edits fade-out instead of fade-in
 
     static strTrackerSpectrum spectrum[2];
     strTrackerPoints points;

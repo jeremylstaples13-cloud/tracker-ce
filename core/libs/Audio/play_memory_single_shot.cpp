@@ -165,8 +165,17 @@ AUDIO_CORE_RAM audio_block_t* AudioPlayMemory::updateSingleShotNormal()
                 else
                     interpolationDif = (readSampleAtRel(in, iPitchCounter + 1) - currentSampelValue);
 
-                *out++ = currentSampelValue +
-                         (int32_t)(((currentFractionPitchCounter >> 2) * interpolationDif) >> 14);
+                int32_t outSample =
+                  currentSampelValue +
+                  (int32_t)(((currentFractionPitchCounter >> 2) * interpolationDif) >> 14);
+                if (sliceFadeActive)
+                {
+                    outSample = applySliceFade(outSample,
+                                               iPitchCounter,
+                                               (int32_t)constrainsInSamples.endPoint -
+                                                 iPitchCounter);
+                }
+                *out++ = outSample;
                 iPitchCounter += castPitchControl;
                 currentFractionPitchCounter += currentFractionPitchControl;
                 if (currentFractionPitchCounter >= MAX_16BIT)
@@ -264,9 +273,17 @@ AUDIO_CORE_RAM audio_block_t* AudioPlayMemory::updateSingleShotReverse()
                 else
                     interpolationDif = (readSampleAtRel(in, iPitchCounter - 1) - currentSampelValue);
 
-                *out++ =
+                int32_t outSample =
                   currentSampelValue +
                   (int32_t)((((-currentFractionPitchCounter) >> 2) * interpolationDif) >> 14);
+                if (sliceFadeActive)
+                {
+                    outSample = applySliceFade(outSample,
+                                               (int32_t)constrainsInSamples.endPoint - 1 -
+                                                 iPitchCounter,
+                                               iPitchCounter);
+                }
+                *out++ = outSample;
                 iPitchCounter += castPitchControl;
                 currentFractionPitchCounter += currentFractionPitchControl;
 

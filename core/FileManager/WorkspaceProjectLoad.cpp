@@ -1,4 +1,5 @@
 #include "WorkspaceProjectLoad.h"
+#include "SliceFades.h"
 
 #include "fileManager.h"
 #include "fileManagerDefs.h"
@@ -165,6 +166,7 @@ void WorkspaceProjectLoad::loadProjectFromWorkspaceFinish()
     newFileManager.startAudioEngine();
 
     newFileManager.getPatternsMetadata()->loadPatternsMetadata();
+    sliceFades.loadWorkspace();
 
 #if FILEMANAGER_HANDLE_SYNTH == 1
     newFileManager.getSynth()->updateToSettings(mtProject.values, true);

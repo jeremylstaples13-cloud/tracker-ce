@@ -2,6 +2,7 @@
 #include "mtStructs.h"
 
 #include "Platform.h"
+#include "SliceFades.h"
 #include "VoiceStreamManager.h"
 #include "fileManager.h"
 #include "fileManagerDefs.h"
@@ -668,6 +669,7 @@ bool cFileManager::saveInstrumentStructToWorkspace(int idx)
     if (saveStatus == fileTransferEnd)
     {
         clearInstrumentChanged(idx);
+        sliceFades.flushWorkspace();
         return true;
     }
 

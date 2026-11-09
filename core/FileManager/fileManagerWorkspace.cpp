@@ -4,6 +4,7 @@
 #include "mtSequencer.h"
 
 #include "fileManager.h"
+#include "SliceFades.h"
 
 #include <cstring>
 
@@ -13,6 +14,7 @@ bool cFileManager::createNewProjectInWorkspace()
 
     clearWorkspace();
     createWorkspaceDirs();
+    sliceFades.loadWorkspace(); // no file in a fresh workspace -> clears all slice fades
 
     report(" crating new project ");
 

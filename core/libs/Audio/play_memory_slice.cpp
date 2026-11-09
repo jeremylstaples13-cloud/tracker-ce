@@ -106,6 +106,8 @@ AUDIO_CORE_FLASH void AudioPlayMemory::playSlice(uint8_t instrIdx, int8_t note)
         }
     }
 
+    setupSliceFade(instrIdx, sliceForcedFlag ? forcedSlice : mtProject.instrument[instrIdx].selectedSlice);
+
     playing = 1;
     //	__enable_irq();
     AudioInterrupts();

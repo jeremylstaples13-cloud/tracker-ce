@@ -314,6 +314,34 @@ class AudioPlayMemory : public AudioStream
     const int16_t* currentSliceCacheAddress = nullptr;
     uint32_t currentSliceCacheFrames = 0;
 
+    // Per-slice fade-in / fade-out (Slice and Beat Slice modes). Lengths are in source frames,
+    // measured from the playback start / to the playback end of the slice; 0 = no fade.
+    bool sliceFadeActive = false;
+    uint32_t sliceFadeInLen = 0;
+    uint32_t sliceFadeOutLen = 0;
+    uint32_t sliceFadeInRecip = 0;  // (1 << 30) / sliceFadeInLen
+    uint32_t sliceFadeOutRecip = 0; // (1 << 30) / sliceFadeOutLen
+
+    void setupSliceFade(uint8_t instrIdx, uint8_t sliceIdx);
+
+    inline int32_t applySliceFade(int32_t sample, int32_t fromStart, int32_t toEnd) const
+    {
+        uint32_t gain = 32768; // Q15 unity
+        if ((uint32_t)fromStart < sliceFadeInLen)
+        {
+            uint32_t g = ((uint32_t)fromStart * sliceFadeInRecip) >> 15;
+            if (g < gain)
+                gain = g;
+        }
+        if ((uint32_t)toEnd < sliceFadeOutLen)
+        {
+            uint32_t g = ((uint32_t)toEnd * sliceFadeOutRecip) >> 15;
+            if (g < gain)
+                gain = g;
+        }
+        return (sample * (int32_t)gain) >> 15;
+    }
+
     inline int16_t readSampleAtRel(const int16_t* in, int32_t relOffset) const
     {
         if (!currentIsStreamed)

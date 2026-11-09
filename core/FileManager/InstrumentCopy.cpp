@@ -1,4 +1,5 @@
 #include "InstrumentCopy.h"
+#include "SliceFades.h"
 
 #include "VoiceStreamManager.h"
 #include "fileManager.h"
@@ -107,6 +108,7 @@ void InstrumentCopy::copyInstrumentInit()
     }
 
     mtProject.instrument[copyDestSlot] = mtProject.instrument[copySrcSlot]; // TODO
+    sliceFades.copyInstrument(copySrcSlot, copyDestSlot);
 
     bool srcStereo = newFileManager.isInstrumentStereo(copySrcSlot);
 
@@ -178,6 +180,7 @@ bool InstrumentCopy::copyInstruments(int srcIdx, int destIdx, uint8_t& copyState
 
 void InstrumentCopy::copyInstrumentFinish()
 {
+    sliceFades.flushWorkspace();
     newFileManager.setStatus(fmCopyingInstrumentsEnd);
     newFileManager.setCurrentOperation(fmNoOperation);
 }

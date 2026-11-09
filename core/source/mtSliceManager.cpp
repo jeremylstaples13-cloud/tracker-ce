@@ -1,4 +1,5 @@
 #include "mtSliceManager.h"
+#include "SliceFades.h"
 #include "VoiceStreamManager.h"
 #include "mtEffect.h"
 #include "mtSliceDetector.h"
@@ -7,10 +8,53 @@
 
 mtSliceManager sliceManager;
 
+static uint8_t instrumentIndex(const strInstrument* instr)
+{
+    int idx = (int)(instr - mtProject.instrument);
+    return (idx >= 0 && idx < kSampleInstrumentsCount) ? (uint8_t)idx : UINT8_MAX;
+}
+
+static SliceFades::Fade selectedSliceFade(const strInstrument* instr)
+{
+    uint8_t idx = instrumentIndex(instr);
+    if (idx == UINT8_MAX || instr->sliceNumber == 0)
+        return { 0, 0 };
+    return sliceFades.get(idx, instr->selectedSlice);
+}
+
 void mtSliceManager::addSlice(strInstrument* instr)
 {
     if (instr->sliceNumber == MAX_SLICE_NUMBER)
         return;
+
+    uint8_t idx = instrumentIndex(instr);
+    sliceFades.prepareEdit(idx);
+    addSliceInternal(instr);
+    sliceFades.onSliceInserted(idx, instr->selectedSlice);
+}
+
+void mtSliceManager::removeSlice(strInstrument* instr)
+{
+    if ((instr->sliceNumber == 0) || (instr->sliceNumber <= instr->selectedSlice))
+        return;
+
+    uint8_t idx = instrumentIndex(instr);
+    uint8_t removed = instr->selectedSlice;
+    sliceFades.prepareEdit(idx);
+    removeSliceInternal(instr);
+    sliceFades.onSliceRemoved(idx, removed);
+}
+
+void mtSliceManager::adjustSlice(strInstrument* instr, int32_t val)
+{
+    uint8_t idx = instrumentIndex(instr);
+    sliceFades.prepareEdit(idx);
+    adjustSliceInternal(instr, val);
+    sliceFades.onSlicesMoved(idx);
+}
+
+void mtSliceManager::addSliceInternal(strInstrument* instr)
+{
     if (instr->sliceNumber == 0)
     {
         instr->sliceNumber++;
@@ -37,10 +81,8 @@ void mtSliceManager::addSlice(strInstrument* instr)
 
     instr->sliceNumber++;
 }
-void mtSliceManager::removeSlice(strInstrument* instr)
+void mtSliceManager::removeSliceInternal(strInstrument* instr)
 {
-    if ((instr->sliceNumber == 0) || (instr->sliceNumber <= instr->selectedSlice))
-        return;
     if ((instr->sliceNumber - 1) == instr->selectedSlice)
     {
         instr->selectedSlice = instr->sliceNumber == 1 ? 0 : instr->selectedSlice - 1;
@@ -58,7 +100,7 @@ void mtSliceManager::removeSlice(strInstrument* instr)
     else
         instr->selectedSlice = 0;
 }
-void mtSliceManager::adjustSlice(strInstrument* instr, int32_t val)
+void mtSliceManager::adjustSliceInternal(strInstrument* instr, int32_t val)
 {
     if ((instr->sliceNumber == 0) || (instr->selectedSlice >= instr->sliceNumber))
         return;
@@ -104,6 +146,10 @@ void mtSliceManager::adjustSlice(strInstrument* instr, int32_t val)
 }
 void mtSliceManager::autoSlice(strInstrument* instr)
 {
+    // Detection runs asynchronously; the fades are re-applied in onAutoSliceFinished().
+    pendingFadeInstr = instrumentIndex(instr);
+    pendingFade = selectedSliceFade(instr);
+
     memset(instr->slices, 0, MAX_SLICE_NUMBER * 2);
     instr->selectedSlice = 0;
 
@@ -123,14 +169,27 @@ void mtSliceManager::autoSlice(strInstrument* instr)
       instr->sample.address, instr->sample.length, instr->slices, &instr->sliceNumber);
 }
 
+void mtSliceManager::onAutoSliceFinished()
+{
+    if (pendingFadeInstr == UINT8_MAX)
+        return;
+
+    sliceFades.onSlicesRebuilt(pendingFadeInstr, pendingFade);
+    pendingFadeInstr = UINT8_MAX;
+}
+
 void mtSliceManager::equalSlice(strInstrument* instr, uint8_t n)
 {
+    SliceFades::Fade fade = selectedSliceFade(instr);
+
     instr->sliceNumber = n;
 
     for (uint8_t i = 0; i < n; i++)
     {
         instr->slices[i] = (MAX_16BIT * i) / n;
     }
+
+    sliceFades.onSlicesRebuilt(instrumentIndex(instr), fade);
 }
 
 uint8_t mtSliceManager::getAutoSliceProgress()

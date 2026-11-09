@@ -1,4 +1,5 @@
 #include "ProjectSave.h"
+#include "SliceFades.h"
 
 #include "VoiceStreamManager.h"
 #include "fileManager.h"
@@ -526,6 +527,14 @@ void ProjectSave::saveProjectFinish()
 
     newFileManager.getPatternsMetadata()->copyPatternsMetadata(cWorkspacePatternsMetadataFilePath,
                                                                destFilePath);
+    //------------ slice fades
+    snprintf(destFilePath,
+             pathSize,
+             cProjectsSliceFadesFileFormat,
+             newFileManager.getCurrentProjectPath(),
+             newFileManager.getCurrentProjectName());
+
+    sliceFades.saveToFile(destFilePath);
     //------------ synth patches
 
 #if FILEMANAGER_HANDLE_SYNTH == 1

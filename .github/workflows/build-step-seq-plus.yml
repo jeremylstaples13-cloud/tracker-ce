@@ -5,7 +5,7 @@ name: Build Tracker+ (Step Seq Mode)
 
 on:
   push:
-    branches: [ feature/step-seq-mode, feature/stng-synth ]
+    branches: [ feature/step-seq-mode, feature/stng-synth, feature/slice-fades ]
   workflow_dispatch:
 
 permissions:

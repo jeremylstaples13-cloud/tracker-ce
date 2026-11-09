@@ -1,5 +1,6 @@
 #include "play_memory.h"
 #include "Audio.h"
+#include "SliceFades.h"
 #include "ampLogarythmicValues.h"
 #include "dspinst.h"
 #include "mtAudioEngine.h"
@@ -183,8 +184,34 @@ void AudioPlayMemory::init(Timer* timer, int channel, int voiceIdx)
 
 //**************************************************************************************UPDATE END
 //**************************************************************************************PLAY
+AUDIO_CORE_FLASH void AudioPlayMemory::setupSliceFade(uint8_t instrIdx, uint8_t sliceIdx)
+{
+    sliceFadeActive = false;
+    sliceFadeInLen = 0;
+    sliceFadeOutLen = 0;
+
+    if (mtProject.instrument[instrIdx].sliceNumber == 0)
+        return;
+
+    SliceFades::Fade fade = sliceFades.getForPlayback(instrIdx, sliceIdx);
+    if (fade.inMs == 0 && fade.outMs == 0)
+        return;
+
+    // Fade times are in real time at the note's pitch, so convert to source frames.
+    float pitch = pitchControl > 0.0f ? pitchControl : 1.0f;
+    float framesPerMs = (AUDIO_SAMPLE_RATE_EXACT / 1000.0f) * pitch;
+
+    sliceFadeInLen = (uint32_t)(fade.inMs * framesPerMs);
+    sliceFadeOutLen = (uint32_t)(fade.outMs * framesPerMs);
+    sliceFadeInRecip = sliceFadeInLen ? (1u << 30) / sliceFadeInLen : 0;
+    sliceFadeOutRecip = sliceFadeOutLen ? (1u << 30) / sliceFadeOutLen : 0;
+    sliceFadeActive = (sliceFadeInLen | sliceFadeOutLen) != 0;
+}
+
 AUDIO_CORE_FLASH uint8_t AudioPlayMemory::play(uint8_t instrIdx, int8_t note)
 {
+    sliceFadeActive = false;
+
     switch (mtProject.instrument[instrIdx].playMode)
     {
         case playModeSingleShot: playSingleShot(instrIdx, note); break;

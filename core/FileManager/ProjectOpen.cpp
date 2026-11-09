@@ -1,4 +1,5 @@
 #include "ProjectOpen.h"
+#include "SliceFades.h"
 
 #include "fileManager.h"
 #include "fileManagerDefs.h"
@@ -346,6 +347,14 @@ void ProjectOpen::openProjectFinish()
 
     newFileManager.getPatternsMetadata()->copyPatternsMetadata(srcFilePath,
                                                                cWorkspacePatternsMetadataFilePath);
+    //------------ slice fades
+    snprintf(srcFilePath,
+             pathSize,
+             cProjectsSliceFadesFileFormat,
+             newFileManager.getCurrentProjectPath(),
+             newFileManager.getCurrentProjectName());
+
+    sliceFades.copyFile(srcFilePath, cWorkspaceSliceFadesFilePath);
     //------------ synth patches
 
 #if FILEMANAGER_HANDLE_SYNTH == 1
