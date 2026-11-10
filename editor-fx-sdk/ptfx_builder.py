@@ -18,6 +18,7 @@ PTFX_VERSION = 1
 HEADER_SIZE = 472
 PARAM_DEF_SIZE = 32
 MAX_PARAMS = 12
+MAX_LIST_ITEMS = 128  # firmware with long-list support; older firmware shows the first 16
 
 FLAG_MAP = {
     "EFFECT": 0x0000,
@@ -90,6 +91,8 @@ def parse_params_from_source(source_code):
     block = match.group(1)
     # Remove single-line comments inside PLUGIN_PARAMS block
     block_clean = re.sub(r"//[^\n]*", "", block)
+    # Join adjacent string literals ("a" "b" -> "ab") so long option lists can span lines
+    block_clean = re.sub(r'"\s+"', "", block_clean)
 
     # Tokenize entries: either PTFX_PARAM_*(...) macros or { ... } brace initializers
     entry_pattern = re.compile(
@@ -104,7 +107,7 @@ def parse_params_from_source(source_code):
             label = m.group(2)
             def_val = m.group(3)
             raw_opts = m.group(4)
-            opts = [o.strip()[:10] for o in raw_opts.split("|") if o.strip()][:16]
+            opts = [o.strip()[:10] for o in raw_opts.split("|") if o.strip()][:MAX_LIST_ITEMS]
             if not opts:
                 opts = ["Default"]
             try:
@@ -155,7 +158,7 @@ def parse_params_from_source(source_code):
                 p_def = float(def_val.strip().rstrip("f"))
                 p_step = float(step.strip().rstrip("f"))
                 if "LIST" in ptype:
-                    opts = [o.strip()[:10] for o in unit.split("|") if o.strip()][:16]
+                    opts = [o.strip()[:10] for o in unit.split("|") if o.strip()][:MAX_LIST_ITEMS]
                     if not opts:
                         opts = ["Default"]
                     p_def = float(min(max(0, int(round(p_def))), len(opts) - 1))
@@ -184,6 +187,32 @@ def parse_params_from_source(source_code):
             except ValueError:
                 continue
     return params
+
+def check_position_independent(toolchain, obj_path):
+    """The loader copies the binary as-is (no relocation, no static constructors). Reject objects
+    that would need either, instead of producing a plugin that crashes on the device."""
+    res = subprocess.run([toolchain + "readelf", "-r", "-S", "-W", obj_path],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if res.returncode != 0:
+        return  # readelf unavailable: skip the check
+    problems = []
+    section = None
+    for line in res.stdout.decode().splitlines():
+        m = re.match(r"Relocation section '([^']+)'", line)
+        if m:
+            section = m.group(1)
+            continue
+        if re.search(r"\.(init_array|ctors)\b", line) and "PROGBITS" not in line and "INIT_ARRAY" in line:
+            problems.append("static constructors (" + line.strip() + ")")
+        if section is None:
+            continue
+        if "R_ARM_GOT" in line:
+            problems.append(f"GOT access in {section}: {line.strip()}")
+        elif "R_ARM_ABS32" in line and section.startswith(".rel.text"):
+            problems.append(f"absolute address in code: {line.strip()}")
+    if problems:
+        print("Position-independence check failed:\n  " + "\n  ".join(problems[:20]), file=sys.stderr)
+        sys.exit(1)
 
 def build_ptfx(c_file, output_file, name=None, author=None, flags_str=None, scratch=None, toolchain_prefix=""):
     with open(c_file, "r") as f:
@@ -234,8 +263,21 @@ def build_ptfx(c_file, output_file, name=None, author=None, flags_str=None, scra
         elf_path = os.path.join(tmpdir, "plugin.elf")
         bin_path = os.path.join(tmpdir, "plugin.bin")
 
+        is_cpp = c_file.endswith((".cpp", ".cc"))
+        cpp_flags = [
+            "-std=gnu++17",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-fno-threadsafe-statics",
+            "-fno-use-cxa-atexit",
+            "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden",
+            # C++ emits out-of-line inline functions; long calls would reach them through the GOT.
+            # Plugins are far smaller than the +-16 MB reach of a Thumb BL, so use direct calls.
+            "-mno-long-calls",
+        ] if is_cpp else []
         gcc_cmd = [
-            toolchain + "gcc",
+            toolchain + ("g++" if is_cpp else "gcc"),
             "-mcpu=cortex-m4",
             "-mthumb",
             "-mfloat-abi=hard",
@@ -247,6 +289,7 @@ def build_ptfx(c_file, output_file, name=None, author=None, flags_str=None, scra
             "-mpic-data-is-text-relative",
             "-mlong-calls",
             "-nostdlib",
+            *cpp_flags,
             f"-I{sdk_dir}",
             "-c", c_file,
             "-o", obj_path
@@ -255,6 +298,8 @@ def build_ptfx(c_file, output_file, name=None, author=None, flags_str=None, scra
         if res.returncode != 0:
             print("Compilation Error:\n" + res.stderr.decode(), file=sys.stderr)
             sys.exit(1)
+
+        check_position_independent(toolchain, obj_path)
 
         ld_objs = [obj_path]
         if len(string_table) > 0:

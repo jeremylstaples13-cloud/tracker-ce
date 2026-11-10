@@ -50,8 +50,23 @@ void mtEffectModular::configurePlugin(const PtfxHeader& hdr,
     if (m_scratchMem && m_scratchSize > 0)
         memset(m_scratchMem, 0, m_scratchSize);
 
+    for (uint8_t i = 0; i < 12; i++)
+    {
+        if (i < hdr.num_params)
+            m_paramValues[i] = hdr.params[i].default_val;
+        else
+            m_paramValues[i] = 0.0f;
+    }
+
     if (m_initFunc)
         m_initFunc(m_scratchMem, m_scratchSize, m_hostApi);
+
+    // Let the plugin see its defaults right away (a generator reports its length from here)
+    if (m_setParamFunc)
+    {
+        for (uint8_t i = 0; i < hdr.num_params && i < 12; i++)
+            m_setParamFunc(i, m_paramValues[i]);
+    }
 
     // Reset per-plugin processing state while preserving loaded/confirmed sample buffers
     clearProcessedData();
@@ -61,14 +76,6 @@ void mtEffectModular::configurePlugin(const PtfxHeader& hdr,
     processing.isApplyOnEnd = false;
     m_processedSamples = 0;
     m_state = false;
-
-    for (uint8_t i = 0; i < 12; i++)
-    {
-        if (i < hdr.num_params)
-            m_paramValues[i] = hdr.params[i].default_val;
-        else
-            m_paramValues[i] = 0.0f;
-    }
 }
 
 void mtEffectModular::setParameter(float& value, int idx)
@@ -85,7 +92,13 @@ uint32_t mtEffectModular::getExpectedProcessLength()
 {
     bool isGenerator = (m_flags & PTFX_FLAG_GENERATOR) != 0;
     if (isGenerator)
+    {
+        // A generator may set its own total length through set_extra_samples(0, length);
+        // otherwise it gets the default 2 s window.
+        if (m_appendSamples > 0)
+            return (m_appendSamples < EDIT_BUFF_SIZE / 2) ? m_appendSamples : EDIT_BUFF_SIZE / 2;
         return (m_targetLength > 0) ? m_targetLength : 44100;
+    }
     return confirmed[0].selection.length + m_prependSamples + m_appendSamples;
 }
 

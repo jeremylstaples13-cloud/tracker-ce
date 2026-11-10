@@ -73,6 +73,7 @@ All reference plugins in [`editor-fx-sdk/effects/`](../editor-fx-sdk/effects) ca
 | [`haas.c`](../editor-fx-sdk/effects/haas.c) | `Haas Effect` | `EFFECT \| STEREO \| IMX_ONLY` | `8,820 B` | `Delay` (`1–100 ms`, default `10 ms`), `Chan` (List: `Left\|Right`). Psychoacoustic stereo Haas widener delaying L or R channel with appended tail fade-out. |
 | [`multimode_filter.c`](../editor-fx-sdk/effects/multimode_filter.c) | `Multi-Mode Filter` | `EFFECT \| STEREO` | `0 B` | `Mode` (List: `LPF 24dB\|LPF 12dB\|BPF 12dB\|HPF 12dB\|Notch\|Peak`), `Cutoff` (`40–16000 Hz`), `Reso` (`0–95 %`), `Drive` (List: `Clean\|SoftSat\|WarmTube\|HardClip\|Foldback`). Zero-delay feedback Cytomic SVF filter. |
 | [`stereo_delay.c`](../editor-fx-sdk/effects/stereo_delay.c) | `Stereo Delay` | `EFFECT \| STEREO` | `176,404 B` | `Time` (`10–1000 ms`), `Fdbk` (`0–95 %`), `Mix` (`0–100 %`), `Tail` (List: `Ring Out\|Cut Off`). Stereo delay line with optional tail ring-out. |
+| [`stng_gen.cpp`](../editor-fx-sdk/effects/stng_gen.cpp) | `STNG Generator` | `GENERATOR \| CONVERT_TO_MONO \| IMX_ONLY` | `140,000 B` | `Preset` (32), `Note` (`C2`–`C8`), `Velo`, `Hold`, `Length` (up to `20 s`), `Chord` (single, intervals, unison), `Decay`, `Bright`, `Exciter`, `Model`, `Pos`, `Body`. Karplus-Strong string / pipe physical model with plucked, struck, bowed, reed and brass exciters. C++ plugin; host tests in [`stng/test/`](../editor-fx-sdk/effects/stng/test). |
 | [`stereo_to_mono.c`](../editor-fx-sdk/effects/stereo_to_mono.c) | `Stereo to Mono` | `STEREO \| CONVERT_TO_MONO` | `0 B` | `Source` (List: `Merge L+R\|Left Only\|Right Only\|Side L-R`), `Gain` (`-12.0 to +6.0 dB`). Converts a stereo sample on Tracker+ / Mini into a true mono sample, reclaiming 50% sample RAM. |
 
 ---
@@ -80,6 +81,10 @@ All reference plugins in [`editor-fx-sdk/effects/`](../editor-fx-sdk/effects) ca
 ## 3. Quick Start & Anatomy of a `.ptfx` Plugin
 
 A `.ptfx` plugin is a single freestanding C/C++ source file compiled into a position-independent ARM Thumb-2 binary with a 472-byte metadata header (`PtfxHeader`).
+
+The loader copies the binary into RAM as-is: there is no relocation and no C/C++ runtime. Plugins must therefore not contain absolute addresses in code, GOT accesses or static constructors, and must not keep tables of pointers that they read at runtime. `ptfx_builder.py` checks the object file and refuses to package one that needs relocation.
+
+**C++ plugins** (`.cpp`) are compiled with `-std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fvisibility=hidden -mno-long-calls`. No standard library is available: avoid `std::` functions (write small `min` / `clamp` helpers), route math through `PtfxHostApi`, keep state in scratch RAM, and provide `memcpy` / `memset` if the compiler needs them for struct copies. See [`stng_gen.cpp`](../editor-fx-sdk/effects/stng_gen.cpp).
 
 ### SDK Contents
 - [`editor-fx-sdk/tracker_plugin.h`](../editor-fx-sdk/tracker_plugin.h) - Standalone C header for plugin authors.
@@ -195,7 +200,7 @@ int32_t plugin_process_block(const int16_t** in, int16_t** out, uint32_t samples
 | Flag | Constant | Behavior |
 | :--- | :--- | :--- |
 | `EFFECT` | `PTFX_FLAG_EFFECT` (`0x0000`) | Standard audio effect transforming `in` to `out` across the selected sample range (plus optional prepended/appended samples via `set_extra_samples`). Disabled on empty sample slots. |
-| `GENERATOR` | `PTFX_FLAG_GENERATOR` (`0x0001`) | Audio generator/synthesizer. Can run on empty instrument slots (`in` is `NULL`), produces up to `88,200` samples (`2.0 s`, or stops early if `plugin_process_block` returns `<= 0`), activates inactive instruments upon apply, and names them `"Gen XX"`. |
+| `GENERATOR` | `PTFX_FLAG_GENERATOR` (`0x0001`) | Audio generator/synthesizer. Can run on empty instrument slots (`in` is `NULL`), produces `88,200` samples (`2.0 s`) by default or the length it sets with `host->set_extra_samples(0, length)` (JL firmware), stops early if `plugin_process_block` returns `<= 0`, activates inactive instruments upon apply, and names them `"Gen XX"`. |
 | `STEREO` | `PTFX_FLAG_STEREO` (`0x0002`) | Processes independent Left/Right channels when `channels == 2` on Tracker+ / Tracker Mini. On Original Tracker (`MK66`), `channels` is always `1`. |
 | `WAVETABLE` | `PTFX_FLAG_WAVETABLE` (`0x0004`) | Automatically sets `instrument.playMode = playModeWavetable` when committed. |
 | `CONVERT_TO_MONO` | `PTFX_FLAG_CONVERT_TO_MONO` (`0x0008`) | Signals `cSampleEditor::isCurrentSampleStereo()` on IMX platforms to export only the Left channel (`memoryAddressR = memoryAddressL`) when saving back to project sample memory, reclaiming 50% sample RAM. |
@@ -238,7 +243,7 @@ PTFX_PARAM_LIST(label, default_index, "Option 0|Option 1|Option 2|...")
 - Users can scroll options with the encoder, step with Up/Down arrow keys, press `Delete` to reset to `default_index`, or press the screen button below an already-selected list column to cycle through options with wrap-around.
 - **`label`**: Up to **7 characters**.
 - **`default_index`**: Zero-based initial item index (`0` to `N - 1`).
-- **`options`**: Pipe-separated (`|`) string options (up to **16 options** per list parameter, max **10 characters** per option label to fit cleanly inside the 100 px column width).
+- **`options`**: Pipe-separated (`|`) string options (up to **128 options** per list parameter on JL firmware, 16 on other builds; max **10 characters** per option label to fit cleanly inside the 100 px column width).
 - Inside `plugin_set_param(uint8_t index, float value)`, `value` is the zero-based option index (`0.0f`, `1.0f`, `2.0f`, ...). Convert it to an integer index with `(uint8_t)(value + 0.5f)`.
 
 ---
@@ -328,7 +333,8 @@ for (uint8_t ch = 0; ch < channels; ch++) {
 
 ### 7.4 Pattern C: Sample & Wavetable Generators (`PTFX_FLAG_GENERATOR`)
 Generators synthesize audio from scratch (`in` is `NULL`) and can run even when an instrument slot is completely empty:
-- Maximum generation window is `88,200` samples (`2.0 seconds` at `44.1 kHz`).
+- The default generation window is `88,200` samples (`2.0 seconds` at `44.1 kHz`).
+- **Longer generators** (JL firmware): call `host->set_extra_samples(0, total_samples)` from `plugin_init()` / `plugin_set_param()` to set the total length, up to `EDIT_BUFF_SIZE / 2` samples (about 44 s). The firmware uses it for the memory check and the render window. Other firmware ignores it and renders 2 s.
 - To generate a shorter sample (such as a `300 ms` drum hit or a single-cycle oscillator waveform of `689` samples), stop generating once your target sample count is reached and return `0` on the next call (or return the exact remaining sample count `< samples` and `0` thereafter).
 - When `plugin_process_block()` finishes early, the firmware automatically trims `processed[ch].selection.length` and `processed[ch].area.length` to the exact number of samples generated.
 - Write identical samples to all `channels` (`for (uint8_t c = 0; c < channels; c++) out[c][i] = pcm;`) so stereo instruments on Tracker+ / Tracker Mini receive both Left and Right channels.

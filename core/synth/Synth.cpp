@@ -14,7 +14,6 @@
 #include "PolySynth/Mixer.h"
 #include "PolySynth/PatchPool.h"
 #include "PolySynth/PatchStore.h"
-#include "engines/StringSynthVoice.h"
 #include "PolySynth/Synth.h"
 #include "PolySynth/config.h"
 
@@ -148,19 +147,7 @@ std::vector<std::string_view> Synth::getPatchList(int part)
 {
     newFileManager.createPatchesFolder();
 
-    const auto typeId = *parts[part].instrumentTypeId;
-    auto list = patchStore->listPatchesByType(typeId);
-
-    // First time the STNG patch list is opened on a card without STNG patches: write the
-    // factory presets. Deleting some of them later does not bring them back; deleting all of
-    // them does.
-    if (list.empty() && typeId == static_cast<int>(polysynth::InstrumentTypeId::kStringSynth))
-    {
-        polysynth::createStringSynthPresets(*patchStore);
-        list = patchStore->listPatchesByType(typeId);
-    }
-
-    return list;
+    return patchStore->listPatchesByType(*parts[part].instrumentTypeId);
 }
 
 bool Synth::loadPatch(int part, const char* name)

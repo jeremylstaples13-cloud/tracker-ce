@@ -67,8 +67,8 @@ const uint32_t SAMPLE_MEMORY_SIZE = (45 * 256 * 1024);     // 11,25 MB = 133.746
 // Tmini / Tplus
 const uint32_t EXTERAL_MEMORY_ADDRESS = 0x80000000;
 const uint32_t TOTAL_EXTERNAL_MEMORY = (64 * 1024 * 1024); // 64 MB
-// ~60 MB minus 64 KB for pattern buffers and 128 KB for the STNG synth delay lines
-const uint32_t SAMPLE_MEMORY_SIZE = ((60 * 1024 - 64 - 128) * 1024);
+// ~60 MB minus 64 KB for pattern buffers and 16 KB for slice fades / Sample Editor plugin lists
+const uint32_t SAMPLE_MEMORY_SIZE = ((60 * 1024 - 64 - 16) * 1024);
 #endif
 
 const uint32_t DELAY_MEMORY_SIZE = (3 * 512 * 1024);               // 1,5 MB

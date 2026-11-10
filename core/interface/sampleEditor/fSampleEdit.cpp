@@ -2193,7 +2193,7 @@ static void functMenu(uint8_t state)
     }
 }
 
-static constexpr uint8_t kMaxListItemsPerParam = 16;
+static constexpr uint8_t kMaxListItemsPerParam = 128; // item count is a uint8_t in the header
 
 __NOINIT(EXTERNAL_RAM) static char* s_modularListItems[kMaxParametersInEffect][kMaxListItemsPerParam];
 __NOINIT(EXTERNAL_RAM) static uint8_t s_modularListCounts[kMaxParametersInEffect];

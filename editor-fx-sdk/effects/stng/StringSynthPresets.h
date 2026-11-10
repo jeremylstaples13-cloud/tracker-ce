@@ -1,19 +1,22 @@
 #pragma once
 
-// STNG parameter ids and factory presets. No Tracker / PolySynth dependencies, so the same
-// table is used by the firmware (StringSynthVoice.cpp writes them as .patch files) and by
+// STNG parameter ids and factory presets, used by the stng_gen.cpp Sample Editor generator and by
 // host-side render tests.
+//
+// The table holds no pointers (names are inline char arrays, unused value slots are kNone): .ptfx
+// plugins are linked at address 0 without relocation, so a pointer table would point nowhere.
 
-#include <initializer_list>
+#include "StringSynthDsp.h"
 
 namespace polysynth::stng
 {
 
-// Patch parameter ids. Append only: saved patches store values by id.
+// Preset parameter ids. kNone marks an unused preset value slot.
 enum class ParamId : int
 {
+    kNone = 0,
     // Exciter
-    kExciter = 0,
+    kExciter,
     kExcTone,
     kExcLength,
     kPosition,
@@ -41,6 +44,7 @@ enum class ParamId : int
     kGlide,
     kLegato,
     kVolume,
+    kCount
 };
 
 struct PresetValue
@@ -49,11 +53,13 @@ struct PresetValue
     float value;
 };
 
-// Values not listed keep the parameter default.
+constexpr int kMaxPresetValues = 16;
+
+// Values not listed keep the parameter default (kDefaults below).
 struct Preset
 {
-    const char* name;
-    std::initializer_list<PresetValue> values;
+    char name[20];
+    PresetValue values[kMaxPresetValues];
 };
 
 // exciter / model values
@@ -63,7 +69,7 @@ constexpr float kString = 0, kPipe = 1;
 using P = ParamId;
 
 // clang-format off
-inline const Preset kPresets[] = {
+static constexpr Preset kPresets[] = {
     // Plucked strings ---------------------------------------------------------------------
     { "01 Nylon Pluck", {
         { P::kExciter, kPluck }, { P::kExcTone, 0.55f }, { P::kExcLength, 6 }, { P::kPosition, 0.18f },
@@ -205,5 +211,86 @@ inline const Preset kPresets[] = {
         { P::kStr2Fine, 15 }, { P::kStr2Level, 0.3f } } },
 };
 // clang-format on
+
+constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
+
+// Parameter defaults (the values a preset starts from), indexed by ParamId
+static constexpr float kDefaults[static_cast<int>(ParamId::kCount)] = {
+    0.0f,   // kNone
+    0.0f,   // kExciter (Pluck)
+    0.7f,   // kExcTone
+    8.0f,   // kExcLength (ms)
+    0.15f,  // kPosition
+    0.5f,   // kVelToTone
+    0.0f,   // kModel (String)
+    3.0f,   // kDecay (s)
+    0.7f,   // kBrightness
+    0.0f,   // kStiffness
+    0.4f,   // kRelease (s)
+    0.0f,   // kStr2Tune (semitones)
+    7.0f,   // kStr2Fine (cents)
+    0.0f,   // kStr2Level
+    0.0f,   // kDrive
+    0.25f,  // kBody
+    220.0f, // kBodyFreq (Hz)
+    0.15f,  // kDrift
+    0.7f,   // kDriftRate (Hz)
+    0.0f,   // kTune (semitones)
+    0.0f,   // kFine (cents)
+    0.0f,   // kGlide (s)
+    0.0f,   // kLegato
+    1.0f,   // kVolume
+};
+
+inline void setParam(Params& p, ParamId id, float v)
+{
+    switch (id)
+    {
+        case ParamId::kExciter: p.exciter = static_cast<Exciter>(static_cast<int>(v + 0.5f)); break;
+        case ParamId::kExcTone: p.excTone = v; break;
+        case ParamId::kExcLength: p.excLengthMs = v; break;
+        case ParamId::kPosition: p.position = v; break;
+        case ParamId::kVelToTone: p.velToTone = v; break;
+        case ParamId::kModel: p.model = static_cast<Model>(static_cast<int>(v + 0.5f)); break;
+        case ParamId::kDecay: p.decaySec = v; break;
+        case ParamId::kBrightness: p.brightness = v; break;
+        case ParamId::kStiffness: p.stiffness = v; break;
+        case ParamId::kRelease: p.releaseSec = v; break;
+        case ParamId::kStr2Tune: p.res2Semitones = static_cast<float>(static_cast<int>(v + (v < 0 ? -0.5f : 0.5f))); break;
+        case ParamId::kStr2Fine: p.res2Cents = v; break;
+        case ParamId::kStr2Level: p.res2Level = v; break;
+        case ParamId::kDrive: p.drive = v; break;
+        case ParamId::kBody: p.body = v; break;
+        case ParamId::kBodyFreq: p.bodyFreqHz = v; break;
+        case ParamId::kDrift: p.drift = v; break;
+        case ParamId::kDriftRate: p.driftRateHz = v; break;
+        case ParamId::kTune: p.tuneSemitones = static_cast<float>(static_cast<int>(v + (v < 0 ? -0.5f : 0.5f))); break;
+        case ParamId::kFine: p.fineCents = v; break;
+        case ParamId::kGlide: p.glideSec = v; break;
+        case ParamId::kVolume: p.gain = v; break;
+        default: break; // kNone, kLegato (single notes only)
+    }
+}
+
+// DSP parameters for a preset: defaults, then the preset's own values
+inline Params presetParams(int index)
+{
+    index = m::clamp(index, 0, kPresetCount - 1);
+
+    Params p;
+    for (int id = 1; id < static_cast<int>(ParamId::kCount); id++)
+    {
+        setParam(p, static_cast<ParamId>(id), kDefaults[id]);
+    }
+    for (int i = 0; i < kMaxPresetValues; i++)
+    {
+        const PresetValue& v = kPresets[index].values[i];
+        if (v.id != ParamId::kNone)
+        {
+            setParam(p, v.id, v.value);
+        }
+    }
+    return p;
+}
 
 } // namespace polysynth::stng

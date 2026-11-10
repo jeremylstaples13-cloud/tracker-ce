@@ -5,7 +5,7 @@ name: Build Tracker+ (Step Seq Mode)
 
 on:
   push:
-    branches: [ feature/step-seq-mode, feature/stng-synth, feature/slice-fades ]
+    branches: [ feature/step-seq-mode, feature/stng-synth, feature/slice-fades, feature/stng-generator ]
   workflow_dispatch:
 
 permissions:
@@ -40,9 +40,18 @@ jobs:
       - name: Build Tracker+ firmware with step sequencer mode
         run: make plus CUSTOM_DEFINES="-DSTEP_SEQ_MODE"
 
-      - name: Upload firmware
+      - name: Test STNG generator plugin on the host
+        run: editor-fx-sdk/effects/stng/test/run_tests.sh
+
+      # Sample Editor plugins (.ptfx), including the STNG generator
+      - name: Build Sample Editor plugins
+        run: make ptfx
+
+      - name: Upload firmware and plugins
         uses: actions/upload-artifact@v4
         with:
           name: TrackerPlus-step-seq-${{ github.sha }}
-          path: build/TrackerPlus_*.ptf
+          path: |
+            build/TrackerPlus_*.ptf
+            editor-fx-sdk/build/Effects/*.ptfx
           if-no-files-found: error

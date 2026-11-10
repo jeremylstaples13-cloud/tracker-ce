@@ -93,8 +93,9 @@ mini:
 
 ptfx:
 	@mkdir -p "$(ROOT_DIR)/editor-fx-sdk/build/Effects"
-	@for src in "$(ROOT_DIR)"/editor-fx-sdk/effects/*.c; do \
-		base=$$(basename "$$src" .c); \
+	@for src in "$(ROOT_DIR)"/editor-fx-sdk/effects/*.c "$(ROOT_DIR)"/editor-fx-sdk/effects/*.cpp; do \
+		[ -e "$$src" ] || continue; \
+		base=$$(basename "$$src"); base=$${base%.*}; \
 		python3 "$(ROOT_DIR)/editor-fx-sdk/ptfx_builder.py" "$$src" -o "$(ROOT_DIR)/editor-fx-sdk/build/Effects/$$base.ptfx" --toolchain "$(TOOLCHAIN)"; \
 	done
 

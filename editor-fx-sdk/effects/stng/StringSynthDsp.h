@@ -3,7 +3,8 @@
 // STNG: Karplus-Strong style physical model (exciter -> 1 or 2 string/pipe resonators).
 //
 // Plain C++ with no Tracker or PolySynth dependencies, so it can be rendered and tested on a
-// host. Delay-line memory is owned by the caller (see StringSynthVoice.cpp).
+// host. Delay-line memory is owned by the caller. Math goes through stng_math.h so the same code
+// builds freestanding as a .ptfx Sample Editor generator (stng_gen.cpp) and natively for tests.
 //
 // Per resonator and sample: 4-point Hermite fractional delay read, one-pole damping lowpass,
 // two first-order allpasses for stiffness (dispersion), optional soft saturation, loop gain
@@ -17,10 +18,9 @@
 //   Brass: resonant lip valve tuned near the note, full-period bore
 // Breath pressure follows the note (attack = Exciter Length, level from velocity).
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
+#include "stng_math.h"
+
+#include <stdint.h>
 
 namespace polysynth::stng
 {
@@ -102,7 +102,7 @@ inline float brassPitchCorrectionCents(float tone)
 {
     constexpr float kTone[] = { 0.0f, 0.3f, 0.5f, 0.7f, 1.0f };
     constexpr float kCents[] = { 22.0f, 13.0f, 3.0f, 11.0f, 42.0f };
-    tone = std::clamp(tone, 0.0f, 1.0f);
+    tone = m::clamp(tone, 0.0f, 1.0f);
     for (int i = 1; i < 5; i++)
     {
         if (tone <= kTone[i])
@@ -117,7 +117,7 @@ inline float brassPitchCorrectionCents(float tone)
 // small helpers ------------------------------------------------------------------------
 inline float fastTanh(float x)
 {
-    x = std::clamp(x, -3.0f, 3.0f);
+    x = m::clamp(x, -3.0f, 3.0f);
     const float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
@@ -125,16 +125,16 @@ inline float fastTanh(float x)
 // phase delay (samples) of y = (1-a) x + a y[-1] at angular frequency w
 inline float onePoleDelay(float a, float w)
 {
-    return std::atan2(a * std::sin(w), 1.0f - a * std::cos(w)) / w;
+    return m::atan2(a * m::sin(w), 1.0f - a * m::cos(w)) / w;
 }
 
 // phase delay (samples) of H(z) = (c + z^-1) / (1 + c z^-1) at angular frequency w
 inline float allpassDelay(float c, float w)
 {
-    const float s = std::sin(w);
-    const float co = std::cos(w);
-    const float numPhase = std::atan2(-s, c + co);
-    const float denPhase = std::atan2(-c * s, 1.0f + c * co);
+    const float s = m::sin(w);
+    const float co = m::cos(w);
+    const float numPhase = m::atan2(-s, c + co);
+    const float denPhase = m::atan2(-c * s, 1.0f + c * co);
     float phase = numPhase - denPhase; // negative
     while (phase > 0.0f)
     {
@@ -173,7 +173,7 @@ class Resonator
     {
         if (line)
         {
-            std::memset(line, 0, sizeof(float) * kMaxDelay);
+            m::zero(line, kMaxDelay);
         }
         write = 0;
         lp = 0.0f;
@@ -191,15 +191,15 @@ class Resonator
         const bool brass = p.exciter == Exciter::kBrass;
         if (brass)
         {
-            freqHz *= std::exp2(-brassPitchCorrectionCents(p.excTone) / 1200.0f);
+            freqHz *= m::exp2(-brassPitchCorrectionCents(p.excTone) / 1200.0f);
         }
         // reed: closed at the reed, open at the bell -> half-period loop, the inversion is in
         // the junction. brass: bore modes at multiples of f/2 (two-period loop); the lip
         // resonance picks the mode at the note.
         const float loopsPerPeriod = reed ? 2.0f : (brass ? 0.5f : (pipe ? 2.0f : 1.0f));
-        const float tone = std::clamp(p.excTone, 0.0f, 1.0f);
+        const float tone = m::clamp(p.excTone, 0.0f, 1.0f);
 
-        freqHz = std::clamp(freqHz, 8.0f, 8000.0f);
+        freqHz = m::clamp(freqHz, 8.0f, 8000.0f);
         const float w = 2.0f * kPi * freqHz / kSampleRate;
 
         // Damping (Brightness 0..1). The classic Karplus-Strong two-point averager is always on,
@@ -207,26 +207,26 @@ class Resonator
         // little damping the burst keeps circulating and is heard repeating, like a short delay).
         // Brightness adds a one-pole lowpass that tracks the note: 3x the fundamental (muffled)
         // up to 43x (bright); at full brightness the averager is also eased off a little.
-        const float b = std::clamp(p.brightness, 0.0f, 1.0f);
+        const float b = m::clamp(p.brightness, 0.0f, 1.0f);
         avgS = 0.5f - 0.15f * b * b;
         {
-            const float fc = std::min(freqHz * (3.0f + 40.0f * b * b), 16000.0f);
-            lpA = std::exp(-2.0f * kPi * fc / kSampleRate);
+            const float fc = m::min(freqHz * (3.0f + 40.0f * b * b), 16000.0f);
+            lpA = m::exp(-2.0f * kPi * fc / kSampleRate);
         }
 
-        apC = -0.65f * std::clamp(p.stiffness, 0.0f, 1.0f);
+        apC = -0.65f * m::clamp(p.stiffness, 0.0f, 1.0f);
 
-        const float co = std::cos(w);
-        const float sn = std::sin(w);
+        const float co = m::cos(w);
+        const float sn = m::sin(w);
 
         // averager (1-S) + S z^-1: phase delay and magnitude at the fundamental
-        float filterDelay = -std::atan2(-avgS * sn, (1.0f - avgS) + avgS * co) / w;
+        float filterDelay = -m::atan2(-avgS * sn, (1.0f - avgS) + avgS * co) / w;
         float filterMag =
-          std::sqrt((1.0f - avgS) * (1.0f - avgS) + avgS * avgS + 2.0f * avgS * (1.0f - avgS) * co);
+          m::sqrt((1.0f - avgS) * (1.0f - avgS) + avgS * avgS + 2.0f * avgS * (1.0f - avgS) * co);
         if (lpA > 0.0f)
         {
             filterDelay += onePoleDelay(lpA, w);
-            filterMag *= (1.0f - lpA) / std::sqrt(1.0f - 2.0f * lpA * co + lpA * lpA);
+            filterMag *= (1.0f - lpA) / m::sqrt(1.0f - 2.0f * lpA * co + lpA * lpA);
         }
         if (apC != 0.0f)
         {
@@ -235,7 +235,7 @@ class Resonator
         const bool driven = reed || brass;
 
         float target = kSampleRate / (freqHz * loopsPerPeriod) - filterDelay;
-        target = std::clamp(target, 3.0f, static_cast<float>(kMaxDelay - 4));
+        target = m::clamp(target, 3.0f, static_cast<float>(kMaxDelay - 4));
 
         if (delay <= 0.0f)
         {
@@ -247,16 +247,16 @@ class Resonator
         // exciters the damping filter's loss at the fundamental is made up as far as possible
         // without the loop gain exceeding 1 (always stable): bright and mid settings decay as
         // set at every pitch, very dark settings decay faster on high notes.
-        const float exponent = -9.9657843f / (std::max(t60, 0.01f) * freqHz * loopsPerPeriod);
-        gain = std::exp2(exponent);
+        const float exponent = -9.9657843f / (m::max(t60, 0.01f) * freqHz * loopsPerPeriod);
+        gain = m::exp2(exponent);
         if (!driven)
         {
-            gain /= std::max(filterMag, 0.05f);
+            gain /= m::max(filterMag, 0.05f);
         }
-        gain = std::min(gain, 0.9999f);
+        gain = m::min(gain, 0.9999f);
         if (brass)
         {
-            gain = std::min(gain, kBrassMaxBoreGain); // lip valve needs some bore loss to speak
+            gain = m::min(gain, kBrassMaxBoreGain); // lip valve needs some bore loss to speak
         }
         if (pipe && !reed && !brass)
         {
@@ -270,18 +270,18 @@ class Resonator
         // speaks close to pitch: lower tone = slacker lips (softer), higher = tighter (brassier).
         // Constant-Q resonator with normalised peak gain, so it behaves the same at all pitches.
         const float lipFreq =
-          std::clamp(freqHz * (0.88f + 0.12f * tone), 20.0f, 0.45f * kSampleRate);
+          m::clamp(freqHz * (0.88f + 0.12f * tone), 20.0f, 0.45f * kSampleRate);
         const float wl = 2.0f * kPi * lipFreq / kSampleRate;
         const float r = 1.0f - kPi * (lipFreq / kLipQ) / kSampleRate;
-        lipA1 = 2.0f * r * std::cos(wl);
+        lipA1 = 2.0f * r * m::cos(wl);
         lipA2 = -r * r;
-        lipNorm = kLipPeakGain * (1.0f - r) * 2.0f * std::sin(wl);
+        lipNorm = kLipPeakGain * (1.0f - r) * 2.0f * m::sin(wl);
 
-        driveK = 1.0f + 7.0f * std::clamp(p.drive, 0.0f, 1.0f);
+        driveK = 1.0f + 7.0f * m::clamp(p.drive, 0.0f, 1.0f);
         useDrive = p.drive > 0.001f;
     }
 
-    float absGain() const { return std::fabs(gain); }
+    float absGain() const { return m::fabs(gain); }
 
     inline float process(float excitation)
     {
@@ -295,14 +295,14 @@ class Resonator
     inline float processDriven(Exciter type, float breath)
     {
         float read;
-        const float bore = readAndFilter(read) * std::fabs(gain);
+        const float bore = readAndFilter(read) * m::fabs(gain);
         float in;
 
         if (type == Exciter::kReed)
         {
             // wave returning from the open bell is inverted
             const float pd = -bore - breath;
-            const float reflection = std::clamp(0.7f + reedSlope * pd, -1.0f, 1.0f);
+            const float reflection = m::clamp(0.7f + reedSlope * pd, -1.0f, 1.0f);
             in = breath + pd * reflection;
         }
         else
@@ -311,7 +311,7 @@ class Resonator
             float lip = lipNorm * (mouth - bore) + lipA1 * lipY1 + lipA2 * lipY2;
             lipY2 = lipY1;
             lipY1 = lip;
-            lip = std::min(lip * lip, 1.0f); // lip opening
+            lip = m::min(lip * lip, 1.0f); // lip opening
             in = lip * mouth + (1.0f - lip) * bore;
             // DC blocker in the loop (the lip valve rectifies)
             const float y = in - jDcX + 0.995f * jDcY;
@@ -394,7 +394,7 @@ class Resonator
 
     inline void push(float value)
     {
-        line[write] = std::clamp(value, -4.0f, 4.0f);
+        line[write] = m::clamp(value, -4.0f, 4.0f);
         if (++write >= kMaxDelay)
         {
             write = 0;
@@ -434,7 +434,7 @@ class ExciterGen
     void attach(float* historyBuffer)
     {
         history = historyBuffer;
-        std::memset(history, 0, sizeof(float) * kExcHistory);
+        m::zero(history, kExcHistory);
         histIdx = 0;
     }
 
@@ -443,7 +443,7 @@ class ExciterGen
         type = p.exciter;
         noise.seed(seed);
         t = 0;
-        len = std::max(1, static_cast<int>(p.excLengthMs * 0.001f * kSampleRate));
+        len = m::max(1, static_cast<int>(p.excLengthMs * 0.001f * kSampleRate));
         amp = 0.25f + 0.75f * velocity;
         if (type == Exciter::kReed)
         {
@@ -459,9 +459,9 @@ class ExciterGen
         active = true;
 
         // exciter brightness: 300 Hz .. 18 kHz, velocity can darken soft notes
-        const float tone = std::clamp(p.excTone - p.velToTone * (1.0f - velocity) * 0.6f, 0.0f, 1.0f);
-        const float fc = 300.0f * std::pow(60.0f, tone);
-        toneK = 1.0f - std::exp(-2.0f * kPi * std::min(fc, 18000.0f) / kSampleRate);
+        const float tone = m::clamp(p.excTone - p.velToTone * (1.0f - velocity) * 0.6f, 0.0f, 1.0f);
+        const float fc = 300.0f * m::pow(60.0f, tone);
+        toneK = 1.0f - m::exp(-2.0f * kPi * m::min(fc, 18000.0f) / kSampleRate);
     }
 
     void release() { held = false; }
@@ -469,10 +469,10 @@ class ExciterGen
     // bow gain normalisation for the current loop gain
     void setBowScale(float loopGain)
     {
-        bowScale = 1.5f * std::sqrt(std::max(1.0f - loopGain * loopGain, 1e-5f));
+        bowScale = 1.5f * m::sqrt(m::max(1.0f - loopGain * loopGain, 1e-5f));
     }
 
-    void setPositionDelay(int samples) { posDelay = std::clamp(samples, 0, kExcHistory - 1); }
+    void setPositionDelay(int samples) { posDelay = m::clamp(samples, 0, kExcHistory - 1); }
 
     bool isActive() const { return active; }
 
@@ -495,7 +495,7 @@ class ExciterGen
             case Exciter::kMallet:
                 if (t < len)
                 {
-                    e = 0.5f * (1.0f - std::cos(2.0f * kPi * static_cast<float>(t) /
+                    e = 0.5f * (1.0f - m::cos(2.0f * kPi * static_cast<float>(t) /
                                                 static_cast<float>(len)));
                     e *= 1.0f + 0.15f * noise.next();
                 }
@@ -510,11 +510,11 @@ class ExciterGen
                 // position comb: this drives the junction directly
                 if (held)
                 {
-                    bowEnv = std::min(1.0f, bowEnv + 1.0f / static_cast<float>(len));
+                    bowEnv = m::min(1.0f, bowEnv + 1.0f / static_cast<float>(len));
                 }
                 else
                 {
-                    bowEnv = std::max(0.0f, bowEnv - 1.0f / (0.04f * kSampleRate));
+                    bowEnv = m::max(0.0f, bowEnv - 1.0f / (0.04f * kSampleRate));
                 }
                 ++t;
                 if (!held && bowEnv <= 0.0f)
@@ -529,11 +529,11 @@ class ExciterGen
                 const float attack = 1.0f / static_cast<float>(len);
                 if (held)
                 {
-                    bowEnv = std::min(1.0f, bowEnv + attack);
+                    bowEnv = m::min(1.0f, bowEnv + attack);
                 }
                 else
                 {
-                    bowEnv = std::max(0.0f, bowEnv - 1.0f / (0.03f * kSampleRate));
+                    bowEnv = m::max(0.0f, bowEnv - 1.0f / (0.03f * kSampleRate));
                 }
                 e = noise.next() * bowEnv * bowScale;
                 break;
@@ -596,6 +596,13 @@ class StringVoiceDsp
 
     bool isAttached() const { return attached; }
 
+    // Distinct seeds give each voice of a chord / unison its own noise and drift.
+    void setSeed(uint32_t s)
+    {
+        seed = s ? s : 0x2545F491u;
+        random.seed(s * 2654435761u);
+    }
+
     void reset()
     {
         res1.clear();
@@ -638,7 +645,7 @@ class StringVoiceDsp
     {
         if (!playing || !attached)
         {
-            std::fill(out, out + n, 0.0f);
+            m::zero(out, n);
             return;
         }
 
@@ -647,7 +654,7 @@ class StringVoiceDsp
         // glide
         if (p.glideSec > 0.0f)
         {
-            const float k = 1.0f - std::exp(-blockSec / p.glideSec);
+            const float k = 1.0f - m::exp(-blockSec / p.glideSec);
             currentNote += (targetNote - currentNote) * k;
         }
         else
@@ -656,22 +663,22 @@ class StringVoiceDsp
         }
 
         // drift: smoothed random walk
-        driftTimer -= blockSec * std::max(p.driftRateHz, 0.01f);
+        driftTimer -= blockSec * m::max(p.driftRateHz, 0.01f);
         if (driftTimer <= 0.0f)
         {
             driftTimer += 1.0f;
             driftTarget = random.next();
         }
-        driftValue += (driftTarget - driftValue) * std::min(1.0f, blockSec * p.driftRateHz * 3.0f);
+        driftValue += (driftTarget - driftValue) * m::min(1.0f, blockSec * p.driftRateHz * 3.0f);
         const float driftCents = p.drift * 18.0f * driftValue + noteDetuneCents;
 
         const float semis = currentNote - 69.0f + p.tuneSemitones +
                             (p.fineCents + driftCents) * 0.01f + pitchBendSemitones;
-        const float freq1 = 440.0f * std::exp2(semis / 12.0f);
+        const float freq1 = 440.0f * m::exp2(semis / 12.0f);
         const float freq2 =
-          freq1 * std::exp2((p.res2Semitones + p.res2Cents * 0.01f) / 12.0f);
+          freq1 * m::exp2((p.res2Semitones + p.res2Cents * 0.01f) / 12.0f);
 
-        const float t60 = held ? p.decaySec : std::min(p.decaySec, p.releaseSec);
+        const float t60 = held ? p.decaySec : m::min(p.decaySec, p.releaseSec);
         res1.prepare(freq1, p, t60, n);
         const bool useRes2 = p.res2Level > 0.001f;
         if (useRes2)
@@ -686,7 +693,7 @@ class StringVoiceDsp
                                    : 0);
 
         // body resonance: Chamberlin SVF bandpass
-        const float bodyF = 2.0f * std::sin(kPi * std::clamp(p.bodyFreqHz, 40.0f, 4000.0f) / kSampleRate);
+        const float bodyF = 2.0f * m::sin(kPi * m::clamp(p.bodyFreqHz, 40.0f, 4000.0f) / kSampleRate);
         const float bodyQ = 0.35f;
         const float bodyMix = p.body * 2.5f;
         const float level2 = p.res2Level;
@@ -722,8 +729,8 @@ class StringVoiceDsp
                 bodyLow += bodyF * bodyBand;
                 const float high = s - bodyLow - bodyQ * bodyBand;
                 bodyBand += bodyF * high;
-                bodyBand = std::clamp(bodyBand, -8.0f, 8.0f);
-                bodyLow = std::clamp(bodyLow, -8.0f, 8.0f);
+                bodyBand = m::clamp(bodyBand, -8.0f, 8.0f);
+                bodyLow = m::clamp(bodyLow, -8.0f, 8.0f);
                 s += bodyMix * bodyBand * bodyQ;
             }
 
@@ -734,7 +741,7 @@ class StringVoiceDsp
 
             const float o = fastTanh(y * outGain);
             out[i] = o;
-            peak = std::max(peak, std::fabs(o));
+            peak = m::max(peak, m::fabs(o));
         }
 
         // stop rendering once the string has died away
